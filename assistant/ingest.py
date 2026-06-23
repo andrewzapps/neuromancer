@@ -9,8 +9,6 @@ import fnmatch
 
 from tqdm import tqdm
 
-from ipynb_filter import convert_ipynb
-
 ignore_directory_patterns = {
     "*/assistant",
     "*/build",
@@ -114,8 +112,6 @@ def make_record(rel_path, source_type, symbol_name, start_line, end_line, conten
 
 
 def read_file_text(file_path):
-    if file_path.endswith(".ipynb"):
-        return convert_ipynb(file_path)
     with open(file_path) as f:
         try:
             return f.read()
@@ -352,9 +348,100 @@ def split_large_python_example(source_lines, rel_path):
     return records
 
 
+def get_cell_source(cell):
+    source = cell.get("source", "")
+    if isinstance(source, list):
+        source = "".join(source)
+    return source.strip()
+
+
+def is_setup_only_code(source):
+    lines = [line for line in source.splitlines() if line.strip()]
+    if not lines:
+        return True
+    return all(
+        line.lstrip().startswith(("!", "%", "#")) for line in lines
+    )
+
+
+def first_markdown_heading(text):
+    for line in text.splitlines():
+        match = re.match(r"^#{1,6}\s+(.+)$", line)
+        if match:
+            return match.group(1).strip()
+    return None
+
+
+def render_ipynb_chunk(cells):
+    parts = []
+    for cell_type, source in cells:
+        if cell_type == "markdown":
+            parts.append(source)
+        elif cell_type == "code":
+            parts.append(f"```python\n{source}\n```")
+    return "\n\n".join(parts)
+
+
+def chunk_ipynb_file(file_path, rel_path):
+    with open(file_path) as f:
+        nb = json.load(f)
+
+    kept = []
+    for cell_index, cell in enumerate(nb.get("cells", [])):
+        cell_type = cell.get("cell_type")
+        if cell_type not in ("markdown", "code"):
+            continue
+        source = get_cell_source(cell)
+        if not source:
+            continue
+        if cell_type == "code" and is_setup_only_code(source):
+            continue
+        kept.append((cell_index, cell_type, source))
+
+    records = []
+    buffer = []
+
+    def flush_buffer():
+        nonlocal buffer
+        if not buffer:
+            return
+        markdown_text = "\n\n".join(
+            source for _, cell_type, source in buffer if cell_type == "markdown"
+        )
+        symbol_name = (
+            first_markdown_heading(markdown_text) if markdown_text else None
+        )
+        start_line = buffer[0][0] + 1
+        end_line = buffer[-1][0] + 1
+        content = render_ipynb_chunk(
+            [(cell_type, source) for _, cell_type, source in buffer]
+        )
+        if content.strip():
+            records.append(
+                make_record(
+                    rel_path, "example", symbol_name, start_line, end_line, content
+                )
+            )
+        buffer = []
+
+    for cell_index, cell_type, source in kept:
+        if cell_type == "markdown":
+            if buffer:
+                flush_buffer()
+            buffer.append((cell_index, cell_type, source))
+        else:
+            buffer.append((cell_index, cell_type, source))
+
+    flush_buffer()
+    return records
+
+
 def chunk_example_file(file_path, root_path):
     """Chunk per example file and split only when very large"""
     rel_path = normalize_rel_path(file_path, root_path)
+    if Path(file_path).suffix.lower() == ".ipynb":
+        return chunk_ipynb_file(file_path, rel_path)
+
     text = read_file_text(file_path)
     source_lines = text.splitlines()
     line_count = len(source_lines) or 1
@@ -491,7 +578,7 @@ def run(root_path: str):
     write_jsonl(src, src_path)
     print(f"wrote {src_path} ({len(src)} chunks)")
 
-    print("reading examples and converting .ipynb -> markdown")
+    print("reading examples")
     examples = collect_chunks(repo_root / "examples", chunk_example_file)
     examples_path = outdir / "examples.jsonl"
     write_jsonl(examples, examples_path)
