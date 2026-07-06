@@ -2,17 +2,23 @@
 
 import argparse
 import json
+import pickle
 import sys
 from pathlib import Path
 
 import chromadb
 from chromadb.utils.embedding_functions import OllamaEmbeddingFunction
 
+from retrieve import BM25_INDEX_PATH, _tokenize
+
 KNOWLEDGE_DIR = Path(__file__).parent / "knowledge"
 CHROMA_PATH = "./chroma_store"
 OLLAMA_URL = "http://localhost:11434"
 EMBED_MODEL = "nomic-embed-text"
 BATCH_SIZE = 100
+
+
+DOC_PREFIX = "search_document: "
 
 METADATA_FIELDS = ("file_path", "symbol_name", "start_line", "end_line", "source_type")
 
@@ -63,12 +69,16 @@ def collection_exists(client: chromadb.PersistentClient, name: str) -> bool:
     return name in {c.name for c in client.list_collections()}
 
 
-def add_batches(collection, records: list[dict]) -> None:
+def add_batches(collection, records: list[dict], embed_fn: OllamaEmbeddingFunction) -> None:
     for start in range(0, len(records), BATCH_SIZE):
         batch = records[start : start + BATCH_SIZE]
+        documents = [r["content"] for r in batch]
+        # embed the prefixed text, but store the unprefixed document.
+        embeddings = embed_fn([DOC_PREFIX + doc for doc in documents])
         collection.add(
             ids=[chroma_id(r) for r in batch],
-            documents=[r["content"] for r in batch],
+            embeddings=embeddings,
+            documents=documents,
             metadatas=[build_metadata(r) for r in batch],
         )
 
@@ -116,25 +126,43 @@ def load_collection(
         )
 
     print(f"Loading {name} ({len(records)} records)...")
-    add_batches(collection, records)
+    add_batches(collection, records, embed_fn)
     return collection
 
 
-def run_test_query(collection: chromadb.Collection) -> None:
-    print('\nTest query on neuromancer_examples: "how do I create a training dataset?"')
-    results = collection.query(
-        query_texts=["how do I create a training dataset?"],
-        n_results=3,
-    )
+def build_and_save_bm25_index(client: chromadb.PersistentClient) -> None:
+    from rank_bm25 import BM25Okapi
 
-    documents = results.get("documents", [[]])[0]
-    metadatas = results.get("metadatas", [[]])[0]
-    for rank, (doc, meta) in enumerate(zip(documents, metadatas), start=1):
-        file_path = (meta or {}).get("file_path", "unknown")
-        text = doc or ""
-        preview = text[: len(text) // 2].replace("\n", " ")
-        print(f"  {rank}. {file_path}")
-        print(f"     {preview}")
+    entries: list[dict] = []
+    for _, collection_name, _ in COLLECTIONS:
+        collection = client.get_collection(name=collection_name)
+        data = collection.get(include=["documents", "metadatas"])
+        for doc_id, document, metadata in zip(
+            data["ids"],
+            data["documents"],
+            data["metadatas"],
+        ):
+            entries.append(
+                {
+                    "id": doc_id,
+                    "document": document or "",
+                    "metadata": metadata or {},
+                    "collection_name": collection_name,
+                }
+            )
+
+    tokenized_corpus = [_tokenize(entry["document"]) for entry in entries]
+    bm25 = BM25Okapi(tokenized_corpus)
+
+    payload = {
+        "entries": entries,
+        "bm25": bm25,
+        "expected_count": len(entries),
+    }
+    with open(BM25_INDEX_PATH, "wb") as f:
+        pickle.dump(payload, f)
+
+    print(f"Built BM25 index: {len(entries)} chunks -> {BM25_INDEX_PATH}")
 
 
 def main(reset: bool = False) -> None:
@@ -157,7 +185,7 @@ def main(reset: bool = False) -> None:
     for collection_name, collection in loaded.items():
         print(f"{collection_name}: {collection.count()}")
 
-    run_test_query(loaded["neuromancer_examples"])
+    build_and_save_bm25_index(client)
 
 
 if __name__ == "__main__":
