@@ -5,24 +5,31 @@ import os
 import pickle
 import re
 from dataclasses import dataclass, replace
+from functools import lru_cache
 from typing import Any
 
 import chromadb
 from chromadb.utils.embedding_functions import OllamaEmbeddingFunction
 
+from config import (
+    BM25_INDEX_PATH,
+    CHROMA_PATH,
+    COLLECTION_NAMES,
+    DEFAULT_TOP_K,
+    EMBED_MODEL,
+    OLLAMA_URL,
+)
+
 logger = logging.getLogger(__name__)
 
-CHROMA_PATH = "./chroma_store"
-BM25_INDEX_PATH = "./chroma_store/bm25_index.pkl"
-OLLAMA_URL = "http://localhost:11434"
-EMBED_MODEL = "nomic-embed-text"
-COLLECTIONS = ["neuromancer_examples", "neuromancer_docs", "neuromancer_src"]
+COLLECTIONS = COLLECTION_NAMES
 MAX_QUERY_CHARS = 2000
 POOL_SIZE = 24
 RERANK_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 RRF_K = 60
-DEFAULT_TOP_K = 5
 NOMIC_QUERY_PREFIX = "search_query: "
+# the cross-encoder truncates at 512 tokens; capping the text avoids wasting time tokenizing
+RERANK_MAX_DOC_CHARS = 2000
 
 _client: chromadb.PersistentClient | None = None
 _collections: dict[str, chromadb.Collection] | None = None
@@ -79,27 +86,21 @@ def clean_query(raw: str) -> str:
     return cleaned
 
 
-def _prefix_query(cleaned_query: str) -> str:
-    return f"{NOMIC_QUERY_PREFIX}{cleaned_query}"
-
-
-def _handle_ollama_error(exc: BaseException) -> None:
-    msg = str(exc).lower()
-    if any(s in msg for s in ("connection refused", "failed to connect", "unreachable", "ollama")):
-        raise RuntimeError("Ollama unreachable") from exc
-    raise exc
+@lru_cache(maxsize=256)
+def _embed_query(cleaned_query: str) -> tuple[float, ...]:
+    """Embed a query once and cache it so repeated queries are fast"""
+    embed_fn = _get_embedding_function()
+    vector = embed_fn([f"{NOMIC_QUERY_PREFIX}{cleaned_query}"])[0]
+    return tuple(float(v) for v in vector)
 
 
 def dense_search(query: str, k: int) -> list[Candidate]:
-    prefixed = _prefix_query(query)
+    query_embedding = list(_embed_query(query))
     collections = _get_collections()
     candidates: list[Candidate] = []
 
     for collection_name, collection in collections.items():
-        try:
-            results = collection.query(query_texts=[prefixed], n_results=k)
-        except Exception as exc:
-            _handle_ollama_error(exc)
+        results = collection.query(query_embeddings=[query_embedding], n_results=k)
 
         ids = results.get("ids", [[]])[0]
         documents = results.get("documents", [[]])[0]
@@ -117,7 +118,10 @@ def dense_search(query: str, k: int) -> list[Candidate]:
                 )
             )
 
-    candidates.sort(key=lambda c: c.dense_dist if c.dense_dist is not None else float("inf"))
+    # id as tie-breaker keeps ordering stable when distances are near-identical
+    candidates.sort(
+        key=lambda c: (c.dense_dist if c.dense_dist is not None else float("inf"), c.id)
+    )
     return candidates
 
 
@@ -140,7 +144,8 @@ def _load_bm25_pickle() -> dict[str, Any] | None:
         logger.warning("Failed to load BM25 index %s (%s)", BM25_INDEX_PATH, exc)
         return None
 
-    if not isinstance(payload, dict) or "entries" not in payload or "bm25" not in payload:
+    required_keys = {"ids", "collection_names", "bm25"}
+    if not isinstance(payload, dict) or not required_keys.issubset(payload):
         logger.warning("BM25 index %s malformed", BM25_INDEX_PATH)
         return None
 
@@ -149,7 +154,11 @@ def _load_bm25_pickle() -> dict[str, Any] | None:
         logger.warning("BM25 index %s is stale", BM25_INDEX_PATH)
         return None
 
-    return {"entries": payload["entries"], "bm25": payload["bm25"]}
+    return {
+        "ids": payload["ids"],
+        "collection_names": payload["collection_names"],
+        "bm25": payload["bm25"],
+    }
 
 
 def _get_bm25_index() -> dict[str, Any]:
@@ -170,25 +179,45 @@ def _get_bm25_index() -> dict[str, Any]:
 def sparse_search(query: str, k: int) -> list[Candidate]:
     cache = _get_bm25_index()
     bm25 = cache["bm25"]
-    entries = cache["entries"]
+    ids = cache["ids"]
+    collection_names = cache["collection_names"]
 
-    #temporary
     query_tokens = _tokenize(query)
     if not query_tokens:
         return []
 
     scores = bm25.get_scores(query_tokens)
-    ranked_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:k]
+    ranked_indices = sorted(range(len(scores)), key=lambda i: (-scores[i], ids[i]))[:k]
+
+    # the pickle only stores ids; fetch document text and metadata from chroma
+    by_collection: dict[str, list[int]] = {}
+    for index in ranked_indices:
+        by_collection.setdefault(collection_names[index], []).append(index)
+
+    collections = _get_collections()
+    fetched: dict[str, tuple[str, dict]] = {}
+    for collection_name, indices in by_collection.items():
+        data = collections[collection_name].get(
+            ids=[ids[i] for i in indices], include=["documents", "metadatas"]
+        )
+        for doc_id, document, metadata in zip(
+            data["ids"], data["documents"], data["metadatas"]
+        ):
+            fetched[doc_id] = (document or "", metadata or {})
 
     candidates: list[Candidate] = []
     for index in ranked_indices:
-        entry = entries[index]
+        doc_id = ids[index]
+        if doc_id not in fetched:
+            logger.warning("BM25 hit %s missing from chroma", doc_id)
+            continue
+        document, metadata = fetched[doc_id]
         candidates.append(
             Candidate(
-                id=entry["id"],
-                document=entry["document"],
-                metadata=entry["metadata"],
-                collection_name=entry["collection_name"],
+                id=doc_id,
+                document=document,
+                metadata=metadata,
+                collection_name=collection_names[index],
                 sparse_score=float(scores[index]),
             )
         )
@@ -219,20 +248,15 @@ def hybrid_merge(dense: list[Candidate], sparse: list[Candidate]) -> list[Candid
         replace(candidate, rrf_score=rrf_scores[candidate.id])
         for candidate in merged.values()
     ]
-    pooled.sort(key=lambda c: c.rrf_score or 0.0, reverse=True)
+    pooled.sort(key=lambda c: (-(c.rrf_score or 0.0), c.id))
     return pooled[:POOL_SIZE]
 
 
 def _get_reranker():
     global _reranker
     if _reranker is None:
-        try:
-            from sentence_transformers import CrossEncoder
-        except ImportError as exc:
-            raise ImportError(
-                "sentence-transformers is required for reranking. "
-            ) from exc
-        _reranker = CrossEncoder(RERANK_MODEL)
+        from sentence_transformers import CrossEncoder
+        _reranker = CrossEncoder(RERANK_MODEL, local_files_only=True)
     return _reranker
 
 
@@ -241,15 +265,23 @@ def rerank(query: str, candidates: list[Candidate], top_k: int) -> list[Candidat
         return []
 
     reranker = _get_reranker()
-    pairs = [(query, candidate.document) for candidate in candidates]
+    pairs = [
+        (query, candidate.document[:RERANK_MAX_DOC_CHARS]) for candidate in candidates
+    ]
     scores = reranker.predict(pairs)
 
     ranked = [
         replace(candidate, rerank_score=float(score))
         for candidate, score in zip(candidates, scores)
     ]
-    ranked.sort(key=lambda c: c.rerank_score or 0.0, reverse=True)
+    ranked.sort(key=lambda c: (-(c.rerank_score or 0.0), c.id))
     return ranked[:top_k]
+
+
+def warmup() -> None:
+    _get_collections()
+    _get_bm25_index()
+    _get_reranker()
 
 
 def retrieve(query: str, top_k: int = DEFAULT_TOP_K) -> list[Candidate]:
@@ -258,23 +290,3 @@ def retrieve(query: str, top_k: int = DEFAULT_TOP_K) -> list[Candidate]:
     sparse = sparse_search(cleaned, k=POOL_SIZE)
     pooled = hybrid_merge(dense, sparse)
     return rerank(cleaned, pooled, top_k=top_k)
-
-
-def _print_hits(query: str, hits: list[Candidate]) -> None:
-    print(f'\nQuery: "{query}"')
-    for rank, hit in enumerate(hits, start=1):
-        file_path = hit.metadata.get("file_path", "unknown")
-        preview = hit.document[: max(1, len(hit.document) * 3 // 4)].replace("\n", " ")
-        print(f"  {rank}. {hit.collection_name} | {file_path} | {preview}")
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
-
-    demo_queries = [
-        "DictDataset",
-    ]
-
-    for demo_query in demo_queries:
-        hits = retrieve(demo_query)
-        _print_hits(demo_query, hits)
