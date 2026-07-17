@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import argparse
 import json
 import pickle
@@ -9,24 +7,21 @@ from pathlib import Path
 import chromadb
 from chromadb.utils.embedding_functions import OllamaEmbeddingFunction
 
-from retrieve import BM25_INDEX_PATH, _tokenize
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from config import (
+    BATCH_SIZE,
+    BM25_INDEX_PATH,
+    CHROMA_PATH,
+    DOC_PREFIX,
+    EMBED_MODEL,
+    KNOWLEDGE_COLLECTIONS,
+    OLLAMA_URL,
+)
+from retrieve import _tokenize
 
-KNOWLEDGE_DIR = Path(__file__).parent / "knowledge"
-CHROMA_PATH = "./chroma_store"
-OLLAMA_URL = "http://localhost:11434"
-EMBED_MODEL = "nomic-embed-text"
-BATCH_SIZE = 100
-
-
-DOC_PREFIX = "search_document: "
+COLLECTIONS = KNOWLEDGE_COLLECTIONS
 
 METADATA_FIELDS = ("file_path", "symbol_name", "start_line", "end_line", "source_type")
-
-COLLECTIONS = [
-    (KNOWLEDGE_DIR / "examples.jsonl", "neuromancer_examples", 847),
-    (KNOWLEDGE_DIR / "docs.jsonl", "neuromancer_docs", 110),
-    (KNOWLEDGE_DIR / "src.jsonl", "neuromancer_src", 1996),
-]
 
 def read_jsonl(path: Path) -> list[dict]:
     records = []
@@ -58,7 +53,21 @@ def build_metadata(record: dict) -> dict:
         value = record.get(key)
         if value is not None:
             metadata[key] = value
+    # implementation source carried as display payload on api chunks
+    if record.get("impl"):
+        metadata["impl"] = record["impl"]
     return metadata
+
+
+def context_header(metadata: dict) -> str:
+    """Header prepended to the text seen by the embedder and BM25 so chunks
+    carry their file/symbol context into retrieval."""
+    header = f"File: {metadata.get('file_path', '')}"
+    if metadata.get("symbol_name"):
+        header += f" | Symbol: {metadata['symbol_name']}"
+    if metadata.get("source_type"):
+        header += f" | Type: {metadata['source_type']}"
+    return header
 
 
 def get_embedding_function() -> OllamaEmbeddingFunction:
@@ -73,13 +82,19 @@ def add_batches(collection, records: list[dict], embed_fn: OllamaEmbeddingFuncti
     for start in range(0, len(records), BATCH_SIZE):
         batch = records[start : start + BATCH_SIZE]
         documents = [r["content"] for r in batch]
-        # embed the prefixed text, but store the unprefixed document.
-        embeddings = embed_fn([DOC_PREFIX + doc for doc in documents])
+        metadatas = [build_metadata(r) for r in batch]
+        # embed prefix + context header + text, but store the plain document
+        embeddings = embed_fn(
+            [
+                f"{DOC_PREFIX}{context_header(md)}\n{doc}"
+                for doc, md in zip(documents, metadatas)
+            ]
+        )
         collection.add(
             ids=[chroma_id(r) for r in batch],
             embeddings=embeddings,
             documents=documents,
-            metadatas=[build_metadata(r) for r in batch],
+            metadatas=metadatas,
         )
 
 
@@ -87,10 +102,11 @@ def load_collection(
     client: chromadb.PersistentClient,
     name: str,
     records: list[dict],
-    expected_count: int,
     embed_fn: OllamaEmbeddingFunction,
     reset: bool,
 ) -> chromadb.Collection:
+    expected_count = len(records)
+
     if reset and collection_exists(client, name):
         client.delete_collection(name)
 
@@ -112,12 +128,6 @@ def load_collection(
         )
         raise SystemExit(1)
 
-    if len(records) != expected_count:
-        print(
-            f"Warning: {name} JSONL has {len(records)} records, expected {expected_count}",
-            file=sys.stderr,
-        )
-
     if reset and current_count > 0:
         client.delete_collection(name)
         collection = client.get_or_create_collection(
@@ -133,8 +143,13 @@ def load_collection(
 def build_and_save_bm25_index(client: chromadb.PersistentClient) -> None:
     from rank_bm25 import BM25Okapi
 
-    entries: list[dict] = []
-    for _, collection_name, _ in COLLECTIONS:
+    # store only ids + collection names; retrieval fetches document text and
+    # metadata from chroma, keeping the pickle small and cold starts fast
+    ids: list[str] = []
+    collection_names: list[str] = []
+    tokenized_corpus: list[list[str]] = []
+
+    for _, collection_name in COLLECTIONS:
         collection = client.get_collection(name=collection_name)
         data = collection.get(include=["documents", "metadatas"])
         for doc_id, document, metadata in zip(
@@ -142,27 +157,23 @@ def build_and_save_bm25_index(client: chromadb.PersistentClient) -> None:
             data["documents"],
             data["metadatas"],
         ):
-            entries.append(
-                {
-                    "id": doc_id,
-                    "document": document or "",
-                    "metadata": metadata or {},
-                    "collection_name": collection_name,
-                }
-            )
+            ids.append(doc_id)
+            collection_names.append(collection_name)
+            text = f"{context_header(metadata or {})}\n{document or ''}"
+            tokenized_corpus.append(_tokenize(text))
 
-    tokenized_corpus = [_tokenize(entry["document"]) for entry in entries]
     bm25 = BM25Okapi(tokenized_corpus)
 
     payload = {
-        "entries": entries,
+        "ids": ids,
+        "collection_names": collection_names,
         "bm25": bm25,
-        "expected_count": len(entries),
+        "expected_count": len(ids),
     }
     with open(BM25_INDEX_PATH, "wb") as f:
         pickle.dump(payload, f)
 
-    print(f"Built BM25 index: {len(entries)} chunks -> {BM25_INDEX_PATH}")
+    print(f"Built BM25 index: {len(ids)} chunks -> {BM25_INDEX_PATH}")
 
 
 def main(reset: bool = False) -> None:
@@ -170,13 +181,12 @@ def main(reset: bool = False) -> None:
     client = chromadb.PersistentClient(path=CHROMA_PATH)
 
     loaded = {}
-    for jsonl_path, collection_name, expected_count in COLLECTIONS:
+    for jsonl_path, collection_name in COLLECTIONS:
         records = read_jsonl(jsonl_path)
         loaded[collection_name] = load_collection(
             client,
             collection_name,
             records,
-            expected_count,
             embed_fn,
             reset,
         )

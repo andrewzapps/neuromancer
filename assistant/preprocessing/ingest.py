@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import ast
 import json
 import os
@@ -36,14 +34,20 @@ ignore_file_patterns = {
     "*.DS_Store",
     "*.env.leave",
     "*.gitignore",
-    "__init__.py",
 }
 
 # autodoc detection
 AUTODOC_MIN_DIRECTIVES = 1
 AUTODOC_MAX_PROSE_LINES = 8
 
-EXAMPLE_SPLIT_LINE_THRESHOLD = 600
+EXAMPLE_SPLIT_LINE_THRESHOLD = 200
+
+# chunks longer than this exceed the embedding model's effective context and
+# would only be partially embedded; split them into line-based parts
+MAX_CHUNK_CHARS = 6000
+
+# cap for implementation source carried as display payload on api chunks
+MAX_IMPL_CHARS = 12000
 
 AUTODOC_DIRECTIVE_RE = re.compile(
     r"^\s*\.\.\s+auto(function|class|module|method|data|attribute)::", re.I
@@ -67,32 +71,19 @@ def should_skip_file(fp):
 
 
 def walk_directory(path, callback, skip_dirs=None):
-
     if skip_dirs is None:
         skip_dirs = list()
 
-    # walk directory twice so we can monitor progress
-    total_dirs = 0
-    for root, dirs, files in tqdm(os.walk(path, topdown=True)):
+    for root, dirs, files in tqdm(
+        os.walk(path, topdown=True), desc="Processing directory", unit="directory"
+    ):
         if should_skip_directory(root) or (root in skip_dirs):
             dirs.clear()
-        total_dirs += 1
+            continue
 
-    with tqdm(total=total_dirs, desc="Processing directory", unit="directory") as pbar:
-
-        for root, dirs, files in tqdm(os.walk(path, topdown=True)):
-            pbar.update(1)
-
-            if should_skip_directory(root) or (root in skip_dirs):
-                dirs.clear()
-
-            else:
-
-                for file_name in files:
-
-                    if not should_skip_file(file_name):
-
-                        callback(os.path.join(root, file_name))
+        for file_name in files:
+            if not should_skip_file(file_name):
+                callback(os.path.join(root, file_name))
 
 
 def normalize_rel_path(file_path, root_path):
@@ -113,11 +104,7 @@ def make_record(rel_path, source_type, symbol_name, start_line, end_line, conten
 
 def read_file_text(file_path):
     with open(file_path) as f:
-        try:
-            return f.read()
-        except Exception as e:
-            print(file_path)
-            raise e
+        return f.read()
 
 
 def write_jsonl(records, outfile):
@@ -126,12 +113,50 @@ def write_jsonl(records, outfile):
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+def split_oversized(record):
+    content = record["content"]
+    if len(content) <= MAX_CHUNK_CHARS:
+        return [record]
+
+    lines = content.splitlines()
+    parts = []
+    part_lines = []
+    part_start = record["start_line"]
+    size = 0
+
+    def flush(end_line):
+        if not part_lines:
+            return
+        parts.append(
+            {
+                **record,
+                "id": f"{record['id']}:part{len(parts)}",
+                "start_line": part_start,
+                "end_line": end_line,
+                "content": "\n".join(part_lines),
+            }
+        )
+
+    for offset, line in enumerate(lines):
+        part_lines.append(line)
+        size += len(line) + 1
+        if size >= MAX_CHUNK_CHARS:
+            flush(record["start_line"] + offset)
+            part_lines = []
+            part_start = record["start_line"] + offset + 1
+            size = 0
+
+    flush(record["end_line"])
+    return parts
+
+
 def collect_chunks(root_path, process_file, skip_dirs=None):
     records = []
     root_path = Path(root_path).resolve()
 
     def callback(file_path):
-        records.extend(process_file(file_path, root_path))
+        for record in process_file(file_path, root_path):
+            records.extend(split_oversized(record))
 
     walk_directory(str(root_path), callback, skip_dirs)
     return records
@@ -546,21 +571,32 @@ def chunk_src_file(file_path, root_path):
         start = node.lineno
         end = node.end_lineno or start
         impl_content = "\n".join(source_lines[start - 1 : end])
-        api_content = extract_signature_and_doc(node, source_lines)
+        doc = ast.get_docstring(node)
 
-        records.append(
-            make_record(rel_path, "api", symbol_name, start, end, api_content)
-        )
-        records.append(
-            make_record(rel_path, "impl", symbol_name, start, end, impl_content)
-        )
+        if doc and doc.strip():
+            # embed only the signature + docstring
+            # carry the implementation along for display instead of indexing
+            # a near-duplicate chunk that competes in search
+            api_content = extract_signature_and_doc(node, source_lines)
+            record = make_record(
+                rel_path, "api", symbol_name, start, end, api_content
+            )
+            if len(impl_content) > MAX_IMPL_CHARS:
+                impl_content = impl_content[:MAX_IMPL_CHARS] + "\n# ... truncated ..."
+            record["impl"] = impl_content
+            records.append(record)
+        else:
+            # no docstring: a bare signature won't match queries, index the code
+            records.append(
+                make_record(rel_path, "impl", symbol_name, start, end, impl_content)
+            )
 
     return records
 
 
 def run(root_path: str):
 
-    outdir = Path("knowledge")
+    outdir = Path(__file__).resolve().parent.parent / "knowledge"
     outdir.mkdir(exist_ok=True)
 
     repo_root = Path(root_path).expanduser().resolve()
@@ -587,6 +623,6 @@ def run(root_path: str):
 
 if __name__ == "__main__":
 
-    # Get the parent directory of the current file
-    neuromancer_root_directory = Path(__file__).resolve().parent.parent
+    neuromancer_root_directory = Path(__file__).resolve().parent.parent.parent
     run(str(neuromancer_root_directory))
+
