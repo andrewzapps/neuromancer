@@ -103,7 +103,7 @@ def make_record(rel_path, source_type, symbol_name, start_line, end_line, conten
 
 
 def read_file_text(file_path):
-    with open(file_path) as f:
+    with open(file_path, encoding="utf-8") as f:
         return f.read()
 
 
@@ -408,7 +408,7 @@ def render_ipynb_chunk(cells):
 
 
 def chunk_ipynb_file(file_path, rel_path):
-    with open(file_path) as f:
+    with open(file_path, encoding="utf-8") as f:
         nb = json.load(f)
 
     kept = []
@@ -555,7 +555,7 @@ def chunk_src_file(file_path, root_path):
         return []
 
     rel_path = normalize_rel_path(file_path, root_path)
-    with open(file_path) as f:
+    with open(file_path, encoding="utf-8") as f:
         source = f.read()
     source_lines = source.splitlines()
 
