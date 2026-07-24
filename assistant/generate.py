@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import sys
-import time
+from collections.abc import Iterator
+
 from ollama import Client
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from config import (
     DEFAULT_TOP_K,
@@ -14,7 +14,8 @@ from config import (
     OLLAMA_URL,
     PROMPT_PATH,
 )
-from retrieve import Candidate, retrieve, warmup
+from retrieve import Candidate, retrieve
+
 _ollama_client: Client | None = None
 
 
@@ -33,34 +34,49 @@ def load_system_prompt() -> str:
     return f"{base}\n\n{mechanics}"
 
 
-def build_messages(query: str, chunks: list[Candidate]) -> list[dict]:
+def sources_from_chunks(chunks: list[Candidate]) -> list[str]:
+    sources: list[str] = []
+    seen: set[str] = set()
+    for chunk in chunks:
+        path = chunk.metadata.get("file_path")
+        if not path or path == "unknown" or path in seen:
+            continue
+        seen.add(path)
+        sources.append(path)
+    return sources
+
+
+def build_messages(
+    query: str,
+    chunks: list[Candidate],
+    history: list[dict] | None = None,
+) -> list[dict]:
     chunk_sections: list[str] = []
 
-    for index, chunk in enumerate(chunks, start=1):
+    for chunk in chunks:
         file_path = chunk.metadata.get("file_path", "unknown")
-        symbol_name = chunk.metadata.get("symbol_name", "unknown")
-        section = (
-            f"### Chunk {index}\n"
-            f"- collection: {chunk.collection_name}\n"
-            f"- file_path: {file_path}\n"
-            f"- symbol: {symbol_name}\n\n"
-            f"{chunk.document[:MAX_CONTEXT_CHUNK_CHARS]}"
-        )
+        symbol_name = chunk.metadata.get("symbol_name")
+        header = f"### {file_path}"
+        if symbol_name and symbol_name != "unknown":
+            header += f" — {symbol_name}"
+        section = f"{header}\n\n{chunk.document[:MAX_CONTEXT_CHUNK_CHARS]}"
         chunk_sections.append(section)
 
     context_block = "\n\n---\n\n".join(chunk_sections)
-    user_content = f"## Retrieved context\n\n{context_block}\n\n---\n\n## Question\n{query}"
+    user_content = (
+        f"## Reference excerpts from the NeuroMANCER repository\n\n"
+        f"{context_block}\n\n---\n\n## Question\n{query}"
+    )
 
-    return [
-        {"role": "system", "content": load_system_prompt()},
-        {"role": "user", "content": user_content},
-    ]
-
-
-def _report_validation_error(raw_output: str, exc: ValidationError) -> None:
-    print("Failed to validate model output against RAGAnswer schema.", file=sys.stderr)
-    print("\nRaw output:\n", raw_output, file=sys.stderr)
-    print(f"\nValidation error:\n{exc}", file=sys.stderr)
+    messages: list[dict] = [{"role": "system", "content": load_system_prompt()}]
+    if history:
+        for turn in history:
+            role = turn.get("role")
+            content = turn.get("content")
+            if role in ("user", "assistant") and isinstance(content, str) and content:
+                messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": user_content})
+    return messages
 
 
 def _get_ollama_client() -> Client:
@@ -74,61 +90,43 @@ def _call_ollama(messages: list[dict]) -> str:
     response = _get_ollama_client().chat(
         model=LLM_MODEL,
         messages=messages,
-        format=RAGAnswer.model_json_schema(),
         options=OLLAMA_CHAT_OPTIONS,
     )
-    return response.message.content
+    return response.message.content or ""
 
 
-def _parse_answer(raw_output: str) -> RAGAnswer:
-    return RAGAnswer.model_validate_json(raw_output)
+def stream_from_chunks(
+    query: str,
+    chunks: list[Candidate],
+    history: list[dict] | None = None,
+) -> Iterator[str]:
+    messages = build_messages(query, chunks, history=history)
+    stream = _get_ollama_client().chat(
+        model=LLM_MODEL,
+        messages=messages,
+        options=OLLAMA_CHAT_OPTIONS,
+        stream=True,
+    )
+    for part in stream:
+        content = part.message.content
+        if content:
+            yield content
 
 
-def generate(query: str, top_k: int = DEFAULT_TOP_K) -> RAGAnswer:
+def generate_from_chunks(
+    query: str,
+    chunks: list[Candidate],
+    history: list[dict] | None = None,
+) -> RAGAnswer:
+    messages = build_messages(query, chunks, history=history)
+    answer = _call_ollama(messages)
+    return RAGAnswer(answer=answer, sources=sources_from_chunks(chunks))
+
+
+def generate(
+    query: str,
+    top_k: int = DEFAULT_TOP_K,
+    history: list[dict] | None = None,
+) -> RAGAnswer:
     chunks = retrieve(query, top_k=top_k)
-    messages = build_messages(query, chunks)
-
-    raw_output = _call_ollama(messages)
-    try:
-        return _parse_answer(raw_output)
-    except ValidationError:
-        raw_output = _call_ollama(messages)
-        try:
-            return _parse_answer(raw_output)
-        except ValidationError as exc:
-            _report_validation_error(raw_output, exc)
-            raise
-
-
-def _print_result(result: RAGAnswer) -> None:
-    print(result.answer)
-    print()
-    print("sources:")
-    for source in result.sources:
-        print(f"  - {source}")
-
-
-def _run_interactive() -> None:
-    warmup()
-    print("Ready. Ask a question (empty line, 'exit', or Ctrl-D to quit).\n")
-
-    while True:
-        try:
-            user_query = input("Question: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            break
-        if not user_query or user_query.lower() in ("exit", "quit"):
-            break
-        try:
-            started = time.perf_counter()
-            _print_result(generate(user_query))
-            elapsed = time.perf_counter() - started
-            print(f"\n({elapsed:.1f}s)")
-        except ValidationError:
-            print("Generation failed, try rephrasing the question.", file=sys.stderr)
-        print()
-
-
-if __name__ == "__main__":
-    _run_interactive()
+    return generate_from_chunks(query, chunks, history=history)

@@ -425,21 +425,37 @@ def chunk_ipynb_file(file_path, rel_path):
 
     records = []
     buffer = []
+    MIN_MARKDOWN_ONLY_CHARS = 200
+    carry: list[tuple] = []
 
     def flush_buffer():
-        nonlocal buffer
+        nonlocal buffer, carry
         if not buffer:
             return
+
+        has_code = any(cell_type == "code" for _, cell_type, _ in buffer)
+        if not has_code:
+            markdown_text = "\n\n".join(
+                source for _, cell_type, source in buffer if cell_type == "markdown"
+            )
+            if len(markdown_text.strip()) < MIN_MARKDOWN_ONLY_CHARS:
+                carry.extend(buffer)
+                buffer = []
+                return
+
+
+        cells = carry + buffer
+        carry = []
         markdown_text = "\n\n".join(
-            source for _, cell_type, source in buffer if cell_type == "markdown"
+            source for _, cell_type, source in cells if cell_type == "markdown"
         )
         symbol_name = (
             first_markdown_heading(markdown_text) if markdown_text else None
         )
-        start_line = buffer[0][0] + 1
-        end_line = buffer[-1][0] + 1
+        start_line = cells[0][0] + 1
+        end_line = cells[-1][0] + 1
         content = render_ipynb_chunk(
-            [(cell_type, source) for _, cell_type, source in buffer]
+            [(cell_type, source) for _, cell_type, source in cells]
         )
         if content.strip():
             records.append(

@@ -1,5 +1,3 @@
-"""Shared paths and runtime settings."""
-
 from __future__ import annotations
 
 import os
@@ -18,7 +16,8 @@ BM25_INDEX_PATH = str(ASSISTANT_DIR / "chroma_store" / "bm25_index.pkl")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 EMBED_MODEL = "nomic-embed-text"
 LLM_MODEL = os.environ.get("NEUROMANCER_LLM_MODEL", "llama3.1:8b")
-OLLAMA_CHAT_OPTIONS = {"num_ctx": 4096, "num_predict": 400}
+
+OLLAMA_CHAT_OPTIONS = {"num_ctx": 8192, "num_predict": 1000, "temperature": 0.2}
 
 COLLECTION_NAMES = ["neuromancer_examples", "neuromancer_docs", "neuromancer_src"]
 KNOWLEDGE_COLLECTIONS = [
@@ -27,7 +26,7 @@ KNOWLEDGE_COLLECTIONS = [
     (KNOWLEDGE_DIR / "src.jsonl", "neuromancer_src"),
 ]
 
-DEFAULT_TOP_K = int(os.environ.get("NEUROMANCER_TOP_K", "3"))
+DEFAULT_TOP_K = int(os.environ.get("NEUROMANCER_TOP_K", "8"))
 MAX_CONTEXT_CHUNK_CHARS = 2500
 
 BATCH_SIZE = 100

@@ -25,16 +25,24 @@ logger = logging.getLogger(__name__)
 COLLECTIONS = COLLECTION_NAMES
 MAX_QUERY_CHARS = 2000
 POOL_SIZE = 24
-RERANK_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+RERANK_MODEL = "BAAI/bge-reranker-base"
 RRF_K = 60
 NOMIC_QUERY_PREFIX = "search_query: "
 # the cross-encoder truncates at 512 tokens; capping the text avoids wasting time tokenizing
 RERANK_MAX_DOC_CHARS = 2000
 
+# how many final top_k slots explicitly named symbols may claim
+MAX_SYMBOL_CHUNKS = 2
+
+# below ~0.1 is near-certain junk
+MIN_RERANK_SCORE = 0.1
+MIN_KEPT_CHUNKS = 3
+
 _client: chromadb.PersistentClient | None = None
 _collections: dict[str, chromadb.Collection] | None = None
 _bm25_cache: dict[str, Any] | None = None
 _reranker: Any | None = None
+_symbol_vocab: set[str] | None = None
 
 
 @dataclass
@@ -122,6 +130,51 @@ def dense_search(query: str, k: int) -> list[Candidate]:
     candidates.sort(
         key=lambda c: (c.dense_dist if c.dense_dist is not None else float("inf"), c.id)
     )
+    return candidates
+
+
+def _get_symbol_vocabulary() -> set[str]:
+    global _symbol_vocab
+    if _symbol_vocab is None:
+        collection = _get_collections()["neuromancer_src"]
+        data = collection.get(include=["metadatas"])
+        _symbol_vocab = {
+            metadata["symbol_name"]
+            for metadata in data["metadatas"]
+            if metadata.get("symbol_name")
+        }
+    return _symbol_vocab
+
+
+def _extract_symbols(query: str) -> list[str]:
+    vocab = _get_symbol_vocabulary()
+    tokens = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*", query))
+    return sorted(token for token in tokens if token in vocab)
+
+
+def symbol_search(query: str) -> list[Candidate]:
+    symbols = _extract_symbols(query)
+    if not symbols:
+        return []
+
+    collection = _get_collections()["neuromancer_src"]
+    candidates: list[Candidate] = []
+    for name in symbols:
+        result = collection.get(
+            where={"symbol_name": name},
+            include=["documents", "metadatas"],
+        )
+        for doc_id, document, metadata in zip(
+            result["ids"], result["documents"], result["metadatas"]
+        ):
+            candidates.append(
+                Candidate(
+                    id=doc_id,
+                    document=document or "",
+                    metadata=metadata or {},
+                    collection_name="neuromancer_src",
+                )
+            )
     return candidates
 
 
@@ -282,6 +335,7 @@ def warmup() -> None:
     _get_collections()
     _get_bm25_index()
     _get_reranker()
+    _get_symbol_vocabulary()
 
 
 def retrieve(query: str, top_k: int = DEFAULT_TOP_K) -> list[Candidate]:
@@ -289,4 +343,33 @@ def retrieve(query: str, top_k: int = DEFAULT_TOP_K) -> list[Candidate]:
     dense = dense_search(cleaned, k=POOL_SIZE)
     sparse = sparse_search(cleaned, k=POOL_SIZE)
     pooled = hybrid_merge(dense, sparse)
-    return rerank(cleaned, pooled, top_k=top_k)
+
+    symbol_hits = symbol_search(cleaned)
+    pooled_ids = {candidate.id for candidate in pooled}
+    pooled += [c for c in symbol_hits if c.id not in pooled_ids]
+
+    ranked = rerank(cleaned, pooled, top_k=len(pooled))
+
+    # drop clearly irrelevant tail chunks
+    ranked = [
+        c
+        for i, c in enumerate(ranked)
+        if i < MIN_KEPT_CHUNKS or (c.rerank_score or 0.0) >= MIN_RERANK_SCORE
+    ]
+    final = ranked[:top_k]
+
+    # cross-encoder tends to demote raw API definitions below tutorials even when users asks about that symbol by name
+    # for explicitly named symbols get guaranteed slots in the final context
+    symbol_ids = {c.id for c in symbol_hits}
+    final_ids = {c.id for c in final}
+    demoted = [c for c in ranked if c.id in symbol_ids and c.id not in final_ids]
+    for extra in demoted[:MAX_SYMBOL_CHUNKS]:
+        for i in range(len(final) - 1, -1, -1):
+            if final[i].id not in symbol_ids:
+                final[i] = extra
+                break
+        else:
+            break
+
+    final.sort(key=lambda c: (-(c.rerank_score or 0.0), c.id))
+    return final
