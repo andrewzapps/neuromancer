@@ -3,10 +3,8 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from ollama import Client
-from pydantic import BaseModel
 
 from config import (
-    DEFAULT_TOP_K,
     LLM_MODEL,
     MAX_CONTEXT_CHUNK_CHARS,
     MECHANICS_PATH,
@@ -14,23 +12,14 @@ from config import (
     OLLAMA_URL,
     PROMPT_PATH,
 )
-from retrieve import Candidate, retrieve
+from retrieve import Candidate
 
 _ollama_client: Client | None = None
 
 
-class RAGAnswer(BaseModel):
-    answer: str
-    sources: list[str]
-
-
-def load_mechanics() -> str:
-    return MECHANICS_PATH.read_text(encoding="utf-8").rstrip()
-
-
-def load_system_prompt() -> str:
+def _load_system_prompt() -> str:
     base = PROMPT_PATH.read_text(encoding="utf-8").rstrip()
-    mechanics = load_mechanics()
+    mechanics = MECHANICS_PATH.read_text(encoding="utf-8").rstrip()
     return f"{base}\n\n{mechanics}"
 
 
@@ -46,7 +35,7 @@ def sources_from_chunks(chunks: list[Candidate]) -> list[str]:
     return sources
 
 
-def build_messages(
+def _build_messages(
     query: str,
     chunks: list[Candidate],
     history: list[dict] | None = None,
@@ -68,7 +57,7 @@ def build_messages(
         f"{context_block}\n\n---\n\n## Question\n{query}"
     )
 
-    messages: list[dict] = [{"role": "system", "content": load_system_prompt()}]
+    messages: list[dict] = [{"role": "system", "content": _load_system_prompt()}]
     if history:
         for turn in history:
             role = turn.get("role")
@@ -86,21 +75,12 @@ def _get_ollama_client() -> Client:
     return _ollama_client
 
 
-def _call_ollama(messages: list[dict]) -> str:
-    response = _get_ollama_client().chat(
-        model=LLM_MODEL,
-        messages=messages,
-        options=OLLAMA_CHAT_OPTIONS,
-    )
-    return response.message.content or ""
-
-
 def stream_from_chunks(
     query: str,
     chunks: list[Candidate],
     history: list[dict] | None = None,
 ) -> Iterator[str]:
-    messages = build_messages(query, chunks, history=history)
+    messages = _build_messages(query, chunks, history=history)
     stream = _get_ollama_client().chat(
         model=LLM_MODEL,
         messages=messages,
@@ -111,22 +91,3 @@ def stream_from_chunks(
         content = part.message.content
         if content:
             yield content
-
-
-def generate_from_chunks(
-    query: str,
-    chunks: list[Candidate],
-    history: list[dict] | None = None,
-) -> RAGAnswer:
-    messages = build_messages(query, chunks, history=history)
-    answer = _call_ollama(messages)
-    return RAGAnswer(answer=answer, sources=sources_from_chunks(chunks))
-
-
-def generate(
-    query: str,
-    top_k: int = DEFAULT_TOP_K,
-    history: list[dict] | None = None,
-) -> RAGAnswer:
-    chunks = retrieve(query, top_k=top_k)
-    return generate_from_chunks(query, chunks, history=history)
