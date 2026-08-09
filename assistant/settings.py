@@ -9,6 +9,7 @@ KNOWLEDGE_DIR = ASSISTANT_DIR / "knowledge"
 PROMPTS_DIR = ASSISTANT_DIR / "prompts"
 PROMPT_PATH = PROMPTS_DIR / "prompt.txt"
 MECHANICS_PATH = PROMPTS_DIR / "mechanics.txt"
+REWRITE_PROMPT_PATH = PROMPTS_DIR / "rewrite.txt"
 
 CHROMA_PATH = str(ASSISTANT_DIR / "chroma_store")
 BM25_INDEX_PATH = str(ASSISTANT_DIR / "chroma_store" / "bm25_index.pkl")
@@ -33,6 +34,9 @@ OPENAI_MODELS = [
     "gpt-4o-mini",
     "gpt-5.6-sol",
 ]
+
+# rewriting a follow-up into a search query is a trivial task, so it stays off
+OPENAI_REWRITE_MODEL = os.environ.get("NEUROMANCER_REWRITE_MODEL", "gpt-4o-mini")
 
 
 COLLECTION_NAMES = ["neuromancer_examples", "neuromancer_docs", "neuromancer_src"]
