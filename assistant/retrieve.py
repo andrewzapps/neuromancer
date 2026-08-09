@@ -11,7 +11,7 @@ from typing import Any
 import chromadb
 from chromadb.utils.embedding_functions import OllamaEmbeddingFunction
 
-from config import (
+from settings import (
     BM25_INDEX_PATH,
     CHROMA_PATH,
     COLLECTION_NAMES,

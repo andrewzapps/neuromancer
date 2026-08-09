@@ -15,9 +15,25 @@ BM25_INDEX_PATH = str(ASSISTANT_DIR / "chroma_store" / "bm25_index.pkl")
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 EMBED_MODEL = "nomic-embed-text"
-LLM_MODEL = os.environ.get("NEUROMANCER_LLM_MODEL", "llama3.1:8b")
 
-OLLAMA_CHAT_OPTIONS = {"num_ctx": 8192, "num_predict": 1000, "temperature": 0.2}
+# "ollama" (local) or "openai" (uses OPENAI_API_KEY)
+LLM_PROVIDER = os.environ.get("NEUROMANCER_LLM_PROVIDER", "ollama").strip().lower()
+if LLM_PROVIDER == "openai":
+    LLM_MODEL = os.environ.get("NEUROMANCER_LLM_MODEL", "gpt-4o-mini")
+else:
+    LLM_MODEL = os.environ.get("NEUROMANCER_LLM_MODEL", "llama3.1:8b")
+    LLM_PROVIDER = "ollama"
+
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+
+OLLAMA_CHAT_OPTIONS = {"num_ctx": 8192}
+
+OPENAI_MODELS = [
+    "gpt-4o-mini",
+    "gpt-5.6-sol",
+]
+
 
 COLLECTION_NAMES = ["neuromancer_examples", "neuromancer_docs", "neuromancer_src"]
 KNOWLEDGE_COLLECTIONS = [

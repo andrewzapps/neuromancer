@@ -3,13 +3,17 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from ollama import Client
+from openai import OpenAI
 
-from config import (
+from settings import (
     LLM_MODEL,
+    LLM_PROVIDER,
     MAX_CONTEXT_CHUNK_CHARS,
     MECHANICS_PATH,
     OLLAMA_CHAT_OPTIONS,
     OLLAMA_URL,
+    OPENAI_API_KEY,
+    OPENAI_BASE_URL,
     PROMPT_PATH,
 )
 from retrieve import Candidate
@@ -75,14 +79,34 @@ def _get_ollama_client() -> Client:
     return _ollama_client
 
 
-def stream_from_chunks(
-    query: str,
-    chunks: list[Candidate],
-    history: list[dict] | None = None,
+def _stream_openai(
+    messages: list[dict],
+    model: str,
+    api_key: str,
 ) -> Iterator[str]:
-    messages = _build_messages(query, chunks, history=history)
+    if not api_key:
+        raise ValueError(
+            "OpenAI API key missing. Set OPENAI_API_KEY or enter it in the sidebar."
+        )
+
+    client = OpenAI(api_key=api_key, base_url=OPENAI_BASE_URL)
+    stream = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        stream=True,
+    )
+    for chunk in stream:
+        delta = chunk.choices[0].delta.content if chunk.choices else None
+        if delta:
+            yield delta
+
+
+def _stream_ollama(
+    messages: list[dict],
+    model: str,
+) -> Iterator[str]:
     stream = _get_ollama_client().chat(
-        model=LLM_MODEL,
+        model=model,
         messages=messages,
         options=OLLAMA_CHAT_OPTIONS,
         stream=True,
@@ -91,3 +115,27 @@ def stream_from_chunks(
         content = part.message.content
         if content:
             yield content
+
+
+def stream_from_chunks(
+    query: str,
+    chunks: list[Candidate],
+    history: list[dict] | None = None,
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
+) -> Iterator[str]:
+    messages = _build_messages(query, chunks, history=history)
+    provider = (provider or LLM_PROVIDER).strip().lower()
+    model = model or LLM_MODEL
+
+    if provider == "openai":
+        yield from _stream_openai(
+            messages,
+            model=model,
+            api_key=api_key if api_key is not None else OPENAI_API_KEY,
+        )
+        return
+
+    yield from _stream_ollama(messages, model=model)
