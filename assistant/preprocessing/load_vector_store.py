@@ -8,7 +8,7 @@ import chromadb
 from chromadb.utils.embedding_functions import OllamaEmbeddingFunction
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from config import (
+from settings import (
     BATCH_SIZE,
     BM25_INDEX_PATH,
     CHROMA_PATH,
