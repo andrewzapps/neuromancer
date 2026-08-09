@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
+from dataclasses import dataclass
 
-from ollama import Client
-from openai import OpenAI
+from ollama import Client, RequestError, ResponseError
+from openai import OpenAI, OpenAIError
 
 from settings import (
     LLM_MODEL,
@@ -14,11 +16,36 @@ from settings import (
     OLLAMA_URL,
     OPENAI_API_KEY,
     OPENAI_BASE_URL,
+    OPENAI_REWRITE_MODEL,
     PROMPT_PATH,
+    REWRITE_PROMPT_PATH,
 )
 from retrieve import Candidate
 
+logger = logging.getLogger(__name__)
+
+
+MAX_REWRITTEN_QUERY_CHARS = 300
+MAX_HISTORY_TURN_CHARS = 600
+
+
+REWRITE_ERRORS = (
+    ConnectionError,
+    TimeoutError,
+    ValueError,
+    OpenAIError,
+    RequestError,
+    ResponseError,
+)
+
 _ollama_client: Client | None = None
+
+
+@dataclass(frozen=True)
+class RewriteResult:
+    query: str
+    rewritten: bool = False
+    error: str | None = None
 
 
 def _load_system_prompt() -> str:
@@ -115,6 +142,97 @@ def _stream_ollama(
         content = part.message.content
         if content:
             yield content
+
+
+def _load_rewrite_prompt() -> str:
+    return REWRITE_PROMPT_PATH.read_text(encoding="utf-8").rstrip()
+
+
+def _build_rewrite_messages(query: str, history: list[dict]) -> list[dict]:
+    turns: list[str] = []
+    for turn in history:
+        role = turn.get("role")
+        content = turn.get("content")
+        if role in ("user", "assistant") and isinstance(content, str) and content:
+            label = "User" if role == "user" else "Assistant"
+            turns.append(f"{label}: {content[:MAX_HISTORY_TURN_CHARS]}")
+
+    conversation = "\n\n".join(turns)
+    user_content = (
+        f"## Conversation so far\n\n{conversation}\n\n"
+        f"## Follow-up question\n{query}"
+    )
+    return [
+        {"role": "system", "content": _load_rewrite_prompt()},
+        {"role": "user", "content": user_content},
+    ]
+
+
+def _complete_openai(messages: list[dict], model: str, api_key: str) -> str:
+    if not api_key:
+        raise ValueError("OpenAI API key missing")
+
+    client = OpenAI(api_key=api_key, base_url=OPENAI_BASE_URL)
+    response = client.chat.completions.create(model=model, messages=messages)
+    return response.choices[0].message.content or ""
+
+
+def _complete_ollama(messages: list[dict], model: str) -> str:
+    response = _get_ollama_client().chat(
+        model=model,
+        messages=messages,
+        options=OLLAMA_CHAT_OPTIONS,
+    )
+    return response.message.content or ""
+
+
+def contextualize_query(
+    query: str,
+    history: list[dict] | None = None,
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
+) -> RewriteResult:
+    """Rewrite a follow-up into a standalone search query.
+    """
+    if not history:
+        return RewriteResult(query=query)
+
+    provider = (provider or LLM_PROVIDER).strip().lower()
+    messages = _build_rewrite_messages(query, history)
+
+    try:
+        if provider == "openai":
+            # pinned: rewriting six words does not need the answering model
+            rewritten = _complete_openai(
+                messages,
+                model=OPENAI_REWRITE_MODEL,
+                api_key=api_key if api_key is not None else OPENAI_API_KEY,
+            )
+        else:
+            rewritten = _complete_ollama(messages, model=model or LLM_MODEL)
+    except REWRITE_ERRORS as exc:
+        logger.warning("Query rewrite failed (%s); using the original query", exc)
+        return RewriteResult(query=query, error=str(exc))
+
+    rewritten = rewritten.strip().strip('"')
+    if not rewritten:
+        logger.warning("Query rewrite returned nothing; using the original query")
+        return RewriteResult(query=query, error="the model returned nothing")
+
+    if len(rewritten) > MAX_REWRITTEN_QUERY_CHARS:
+        logger.warning(
+            "Query rewrite returned %d chars, expected a short query; "
+            "using the original query",
+            len(rewritten),
+        )
+        return RewriteResult(
+            query=query,
+            error=f"the model answered instead of rewriting ({len(rewritten)} chars)",
+        )
+
+    return RewriteResult(query=rewritten, rewritten=rewritten != query)
 
 
 def stream_from_chunks(

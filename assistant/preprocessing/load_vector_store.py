@@ -17,7 +17,7 @@ from settings import (
     KNOWLEDGE_COLLECTIONS,
     OLLAMA_URL,
 )
-from retrieve import _tokenize
+from retrieve import _tokenize, context_header
 
 COLLECTIONS = KNOWLEDGE_COLLECTIONS
 
@@ -57,17 +57,6 @@ def build_metadata(record: dict) -> dict:
     if record.get("impl"):
         metadata["impl"] = record["impl"]
     return metadata
-
-
-def context_header(metadata: dict) -> str:
-    """Header prepended to the text seen by the embedder and BM25 so chunks
-    carry their file/symbol context into retrieval."""
-    header = f"File: {metadata.get('file_path', '')}"
-    if metadata.get("symbol_name"):
-        header += f" | Symbol: {metadata['symbol_name']}"
-    if metadata.get("source_type"):
-        header += f" | Type: {metadata['source_type']}"
-    return header
 
 
 def get_embedding_function() -> OllamaEmbeddingFunction:
