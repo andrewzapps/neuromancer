@@ -34,8 +34,8 @@ RERANK_MAX_DOC_CHARS = 2000
 # how many final top_k slots explicitly named symbols may claim
 MAX_SYMBOL_CHUNKS = 2
 
-# below ~0.1 is near-certain junk
-MIN_RERANK_SCORE = 0.1
+
+RELATIVE_RERANK_FLOOR = 0.02
 MIN_KEPT_CHUNKS = 3
 
 _client: chromadb.PersistentClient | None = None
@@ -96,7 +96,6 @@ def clean_query(raw: str) -> str:
 
 @lru_cache(maxsize=256)
 def _embed_query(cleaned_query: str) -> tuple[float, ...]:
-    """Embed a query once and cache it so repeated queries are fast"""
     embed_fn = _get_embedding_function()
     vector = embed_fn([f"{NOMIC_QUERY_PREFIX}{cleaned_query}"])[0]
     return tuple(float(v) for v in vector)
@@ -176,6 +175,15 @@ def symbol_search(query: str) -> list[Candidate]:
                 )
             )
     return candidates
+
+
+def context_header(metadata: dict) -> str:
+    header = f"File: {metadata.get('file_path', '')}"
+    if metadata.get("symbol_name"):
+        header += f" | Symbol: {metadata['symbol_name']}"
+    if metadata.get("source_type"):
+        header += f" | Type: {metadata['source_type']}"
+    return header
 
 
 def _tokenize(text: str) -> list[str]:
@@ -319,7 +327,12 @@ def rerank(query: str, candidates: list[Candidate], top_k: int) -> list[Candidat
 
     reranker = _get_reranker()
     pairs = [
-        (query, candidate.document[:RERANK_MAX_DOC_CHARS]) for candidate in candidates
+        (
+            query,
+            f"{context_header(candidate.metadata)}\n"
+            f"{candidate.document[:RERANK_MAX_DOC_CHARS]}",
+        )
+        for candidate in candidates
     ]
     scores = reranker.predict(pairs)
 
@@ -350,16 +363,17 @@ def retrieve(query: str, top_k: int = DEFAULT_TOP_K) -> list[Candidate]:
 
     ranked = rerank(cleaned, pooled, top_k=len(pooled))
 
-    # drop clearly irrelevant tail chunks
-    ranked = [
+    # drop chunks far below the best match for this query
+    top_score = ranked[0].rerank_score or 0.0 if ranked else 0.0
+    score_floor = top_score * RELATIVE_RERANK_FLOOR
+    kept = [
         c
         for i, c in enumerate(ranked)
-        if i < MIN_KEPT_CHUNKS or (c.rerank_score or 0.0) >= MIN_RERANK_SCORE
+        if i < MIN_KEPT_CHUNKS or (c.rerank_score or 0.0) >= score_floor
     ]
-    final = ranked[:top_k]
+    final = kept[:top_k]
 
     # cross-encoder tends to demote raw API definitions below tutorials even when users asks about that symbol by name
-    # for explicitly named symbols get guaranteed slots in the final context
     symbol_ids = {c.id for c in symbol_hits}
     final_ids = {c.id for c in final}
     demoted = [c for c in ranked if c.id in symbol_ids and c.id not in final_ids]
