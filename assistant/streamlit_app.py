@@ -181,6 +181,11 @@ def build_status_caption(
     return caption
 
 
+#give rewriter more history and context
+GENERATION_HISTORY_TURNS = 3
+REWRITE_HISTORY_TURNS = 6
+
+
 def get_recent_context(n: int = 3) -> list[dict]:
     return [
         {"role": m["role"], "content": m["content"]}
@@ -331,12 +336,10 @@ if user_message:
     with st.chat_message("assistant"):
         with st.spinner("Researching..."):
             t0 = time.perf_counter()
-            history = get_recent_context(n=3)
-            # retrieval sees only the current message, so resolve follow-ups
-            # ("how do I change the horizon?") against the conversation first
+            history = get_recent_context(n=GENERATION_HISTORY_TURNS)
             rewrite = contextualize_query(
                 user_message,
-                history,
+                get_recent_context(n=REWRITE_HISTORY_TURNS),
                 provider=provider,
                 model=model,
                 api_key=api_key,
