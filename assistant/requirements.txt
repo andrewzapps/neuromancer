@@ -1,0 +1,17 @@
+# NeuroMANCER-GPT runtime dependencies.
+
+
+# --- UI ---
+streamlit==1.61.1
+
+# --- retrieval ---
+chromadb==1.5.9
+rank-bm25==0.2.2
+sentence-transformers==5.6.0
+
+# --- LLM providers ---
+ollama==0.6.2
+openai==2.53.0
+
+# --- ingestion ---
+tqdm==4.69.0

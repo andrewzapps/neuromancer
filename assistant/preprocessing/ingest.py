@@ -638,7 +638,15 @@ def run(root_path: str):
 
 
 if __name__ == "__main__":
+    import sys
 
-    neuromancer_root_directory = Path(__file__).resolve().parent.parent.parent
-    run(str(neuromancer_root_directory))
+    # default assumes assistant/ lives inside the repository being ingested;
+    # an explicit path (or NEUROMANCER_ROOT) allows running from anywhere
+    default_root = Path(__file__).resolve().parent.parent.parent
+    root = (
+        sys.argv[1]
+        if len(sys.argv) > 1
+        else os.environ.get("NEUROMANCER_ROOT", str(default_root))
+    )
+    run(str(root))
 
