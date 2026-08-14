@@ -3,16 +3,15 @@ set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+require_command uv "Install it from https://docs.astral.sh/uv/getting-started/installation/"
+
 cd "${ASSISTANT_DIR}"
 
 # --- ollama ---------------------------------------------------------------
 # required even on the OpenAI provider: query embeddings always go through it
 ensure_ollama
 
-# --- preflight ------------------------------------------------------------
-# fail here with something actionable rather than deep inside a Streamlit
-# traceback on the first question
+
 missing=()
 [ -f "chroma_store/chroma.sqlite3" ] || missing+=("chroma_store/chroma.sqlite3")
 [ -f "chroma_store/bm25_index.pkl" ] || missing+=("chroma_store/bm25_index.pkl")
@@ -25,6 +24,6 @@ fi
 # --- launch ---------------------------------------------------------------
 log "Starting Streamlit"
 if [ -n "${PORT:-}" ]; then
-    exec "${PYTHON_BIN}" -m streamlit run streamlit_app.py --server.port "${PORT}"
+    exec uv run streamlit run app/streamlit_app.py --server.port "${PORT}"
 fi
-exec "${PYTHON_BIN}" -m streamlit run streamlit_app.py
+exec uv run streamlit run app/streamlit_app.py

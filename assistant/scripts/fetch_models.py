@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 ASSISTANT_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ASSISTANT_DIR))
+sys.path.insert(0, str(ASSISTANT_DIR / "app"))
 
 from retrieve import RERANK_MODEL 
 

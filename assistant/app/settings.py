@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-ASSISTANT_DIR = Path(__file__).resolve().parent
+ASSISTANT_DIR = Path(__file__).resolve().parent.parent
 
 KNOWLEDGE_DIR = ASSISTANT_DIR / "knowledge"
 PROMPTS_DIR = ASSISTANT_DIR / "prompts"

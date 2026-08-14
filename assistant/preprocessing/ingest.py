@@ -34,6 +34,7 @@ ignore_file_patterns = {
     "*.DS_Store",
     "*.env.leave",
     "*.gitignore",
+    "__init__.py",
 }
 
 # autodoc detection
@@ -640,8 +641,6 @@ def run(root_path: str):
 if __name__ == "__main__":
     import sys
 
-    # default assumes assistant/ lives inside the repository being ingested;
-    # an explicit path (or NEUROMANCER_ROOT) allows running from anywhere
     default_root = Path(__file__).resolve().parent.parent.parent
     root = (
         sys.argv[1]

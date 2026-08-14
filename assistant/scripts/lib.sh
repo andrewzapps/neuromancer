@@ -57,5 +57,5 @@ ensure_ollama_model() {
 
 
 setting() {
-    "${PYTHON_BIN:-python3}" -c "import sys; sys.path.insert(0, '${ASSISTANT_DIR}'); import settings; print(getattr(settings, '$1'))"
+    (cd "${ASSISTANT_DIR}/app" && uv run python -c "import settings; print(getattr(settings, '$1'))")
 }

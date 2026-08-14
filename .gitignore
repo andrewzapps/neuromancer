@@ -175,9 +175,10 @@ cython_debug/
 
 building_parameters/
 
-# NeuroMANCER-GPT generated artifacts -- rebuilt by assistant/scripts/setup.sh
+
 assistant/chroma_store/
 assistant/knowledge/
 assistant/__pycache__/
+assistant/app/__pycache__/
 assistant/preprocessing/__pycache__/
 

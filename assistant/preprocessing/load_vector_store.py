@@ -7,7 +7,7 @@ from pathlib import Path
 import chromadb
 from chromadb.utils.embedding_functions import OllamaEmbeddingFunction
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
 from settings import (
     BATCH_SIZE,
     BM25_INDEX_PATH,

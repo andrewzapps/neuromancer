@@ -244,8 +244,8 @@ def llm_sidebar() -> None:
     st.session_state.active_api_key = api_key
     st.caption(f"Active: `{provider}` / `{model}`")
 
-    # clear chat on provider
-    llm_sig = (provider, model if provider == "openai" else "ollama")
+    # clear chat on provider or model change
+    llm_sig = (provider, model)
     prev_sig = st.session_state.get("_llm_sig")
     if prev_sig is not None and llm_sig != prev_sig:
         st.session_state.messages = []

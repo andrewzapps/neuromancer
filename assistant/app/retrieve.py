@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-import os
+import math
 import pickle
 import re
 from dataclasses import dataclass, replace
@@ -195,31 +195,26 @@ def _live_chunk_count() -> int:
 
 
 def _load_bm25_pickle() -> dict[str, Any] | None:
-    if not os.path.exists(BM25_INDEX_PATH):
-        return None
-
     try:
         with open(BM25_INDEX_PATH, "rb") as f:
             payload = pickle.load(f)
+
+        required_keys = {"ids", "collection_names", "bm25"}
+        if not isinstance(payload, dict) or not required_keys.issubset(payload):
+            raise ValueError("malformed")
+
+        expected = payload.get("expected_count")
+        if expected is not None and expected != _live_chunk_count():
+            raise ValueError("stale")
+
+        return {
+            "ids": payload["ids"],
+            "collection_names": payload["collection_names"],
+            "bm25": payload["bm25"],
+        }
     except Exception as exc:
-        logger.warning("Failed to load BM25 index %s (%s)", BM25_INDEX_PATH, exc)
+        logger.warning("BM25 index %s unusable (%s)", BM25_INDEX_PATH, exc)
         return None
-
-    required_keys = {"ids", "collection_names", "bm25"}
-    if not isinstance(payload, dict) or not required_keys.issubset(payload):
-        logger.warning("BM25 index %s malformed", BM25_INDEX_PATH)
-        return None
-
-    expected = payload.get("expected_count")
-    if expected is not None and expected != _live_chunk_count():
-        logger.warning("BM25 index %s is stale", BM25_INDEX_PATH)
-        return None
-
-    return {
-        "ids": payload["ids"],
-        "collection_names": payload["collection_names"],
-        "bm25": payload["bm25"],
-    }
 
 
 def _get_bm25_index() -> dict[str, Any]:
@@ -336,8 +331,10 @@ def rerank(query: str, candidates: list[Candidate], top_k: int) -> list[Candidat
     ]
     scores = reranker.predict(pairs)
 
+    # BAAI/bge-reranker-base returns unbounded raw logits (often negative);
+    # sigmoid maps them to (0, 1) so the relative floor below means what it says
     ranked = [
-        replace(candidate, rerank_score=float(score))
+        replace(candidate, rerank_score=1.0 / (1.0 + math.exp(-float(score))))
         for candidate, score in zip(candidates, scores)
     ]
     ranked.sort(key=lambda c: (-(c.rerank_score or 0.0), c.id))

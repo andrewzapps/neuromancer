@@ -194,8 +194,6 @@ def contextualize_query(
     model: str | None = None,
     api_key: str | None = None,
 ) -> RewriteResult:
-    """Rewrite a follow-up into a standalone search query.
-    """
     if not history:
         return RewriteResult(query=query)
 
@@ -204,7 +202,6 @@ def contextualize_query(
 
     try:
         if provider == "openai":
-            # pinned: rewriting six words does not need the answering model
             rewritten = _complete_openai(
                 messages,
                 model=OPENAI_REWRITE_MODEL,
@@ -212,25 +209,13 @@ def contextualize_query(
             )
         else:
             rewritten = _complete_ollama(messages, model=model or LLM_MODEL)
+
+        rewritten = rewritten.strip().strip('"')
+        if not rewritten or len(rewritten) > MAX_REWRITTEN_QUERY_CHARS:
+            raise ValueError("rewrite returned an unusable query")
     except REWRITE_ERRORS as exc:
         logger.warning("Query rewrite failed (%s); using the original query", exc)
         return RewriteResult(query=query, error=str(exc))
-
-    rewritten = rewritten.strip().strip('"')
-    if not rewritten:
-        logger.warning("Query rewrite returned nothing; using the original query")
-        return RewriteResult(query=query, error="the model returned nothing")
-
-    if len(rewritten) > MAX_REWRITTEN_QUERY_CHARS:
-        logger.warning(
-            "Query rewrite returned %d chars, expected a short query; "
-            "using the original query",
-            len(rewritten),
-        )
-        return RewriteResult(
-            query=query,
-            error=f"the model answered instead of rewriting ({len(rewritten)} chars)",
-        )
 
     return RewriteResult(query=rewritten, rewritten=rewritten != query)
 
