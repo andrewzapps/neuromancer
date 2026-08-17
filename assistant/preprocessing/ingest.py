@@ -58,6 +58,7 @@ RST_UNDERLINE_CHARS = set('=-~^"')
 
 
 def should_skip_directory(d):
+    d = Path(d).as_posix()
     for p in ignore_directory_patterns:
         if fnmatch.fnmatch(d, p):
             return True
