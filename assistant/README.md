@@ -11,7 +11,7 @@ The assistant indexes this repository, so it ships with the repo — not with
 `pip install neuromancer`. Clone first.
 
 ```sh
-git clone https://github.com/pnnl/neuromancer.git
+git clone https://github.com/andrewzapps/neuromancer.git
 cd neuromancer/assistant
 
 bash scripts/setup.sh          # dependencies, models, search index
