@@ -1,7 +1,9 @@
 [server]
 headless = true
 port = 8501
-address = "0.0.0.0"
+# The watcher probes __path__ on every loaded module, which triggers transformers'
+fileWatcherType = "none"
+address = "127.0.0.1"
 
 [browser]
 gatherUsageStats = false

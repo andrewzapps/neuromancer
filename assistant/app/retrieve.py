@@ -47,6 +47,8 @@ _symbol_vocab: set[str] | None = None
 
 @dataclass
 class Candidate:
+    """One retrieved chunk; each score field stays None until its stage runs."""
+
     id: str
     document: str
     metadata: dict
@@ -81,6 +83,7 @@ def _get_collections() -> dict[str, chromadb.Collection]:
 
 
 def clean_query(raw: str) -> str:
+    """Collapse whitespace and truncate to MAX_QUERY_CHARS; raises if empty."""
     cleaned = re.sub(r"\s+", " ", raw.strip())
     if not cleaned:
         raise ValueError("Query is empty")
@@ -102,6 +105,7 @@ def _embed_query(cleaned_query: str) -> tuple[float, ...]:
 
 
 def dense_search(query: str, k: int) -> list[Candidate]:
+    """Search every collection by vector similarity; returns k hits per collection."""
     query_embedding = list(_embed_query(query))
     collections = _get_collections()
     candidates: list[Candidate] = []
@@ -152,6 +156,7 @@ def _extract_symbols(query: str) -> list[str]:
 
 
 def symbol_search(query: str) -> list[Candidate]:
+    """Exact lookup for symbols named literally in the query, e.g. "LitTrainer.fit"."""
     symbols = _extract_symbols(query)
     if not symbols:
         return []
@@ -178,6 +183,7 @@ def symbol_search(query: str) -> list[Candidate]:
 
 
 def context_header(metadata: dict) -> str:
+    """Provenance header prepended to a chunk; changing it invalidates the index."""
     header = f"File: {metadata.get('file_path', '')}"
     if metadata.get("symbol_name"):
         header += f" | Symbol: {metadata['symbol_name']}"
@@ -187,6 +193,7 @@ def context_header(metadata: dict) -> str:
 
 
 def _tokenize(text: str) -> list[str]:
+    # shared with load_vector_store.py; changing this needs a BM25 index rebuild
     return re.findall(r"\w+", text.lower())
 
 
@@ -226,13 +233,14 @@ def _get_bm25_index() -> dict[str, Any]:
     if index is None:
         raise RuntimeError(
             f"BM25 index unavailable at {BM25_INDEX_PATH}. "
+            "Build it with: bash scripts/setup.sh"
         )
-    #build cache to save compute
     _bm25_cache = index
     return _bm25_cache
 
 
 def sparse_search(query: str, k: int) -> list[Candidate]:
+    """Rank chunks by BM25 keyword score, refetching text from Chroma for the top k."""
     cache = _get_bm25_index()
     bm25 = cache["bm25"]
     ids = cache["ids"]
@@ -281,6 +289,7 @@ def sparse_search(query: str, k: int) -> list[Candidate]:
 
 
 def hybrid_merge(dense: list[Candidate], sparse: list[Candidate]) -> list[Candidate]:
+    """Fuse dense and sparse results with Reciprocal Rank Fusion, capped at POOL_SIZE."""
     merged: dict[str, Candidate] = {}
     rrf_scores: dict[str, float] = {}
 
@@ -317,6 +326,7 @@ def _get_reranker():
 
 
 def rerank(query: str, candidates: list[Candidate], top_k: int) -> list[Candidate]:
+    """Re-score candidates with the cross-encoder; scores are sigmoid-squashed to (0, 1)."""
     if not candidates:
         return []
 
@@ -342,6 +352,7 @@ def rerank(query: str, candidates: list[Candidate], top_k: int) -> list[Candidat
 
 
 def warmup() -> None:
+    """Preload every cached resource at startup, so the first query is not slow."""
     _get_collections()
     _get_bm25_index()
     _get_reranker()
@@ -349,6 +360,7 @@ def warmup() -> None:
 
 
 def retrieve(query: str, top_k: int = DEFAULT_TOP_K) -> list[Candidate]:
+    """Run the full pipeline -- dense + sparse + symbol, fused and reranked."""
     cleaned = clean_query(query)
     dense = dense_search(cleaned, k=POOL_SIZE)
     sparse = sparse_search(cleaned, k=POOL_SIZE)

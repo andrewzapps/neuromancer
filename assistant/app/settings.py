@@ -32,7 +32,7 @@ OLLAMA_CHAT_OPTIONS = {"num_ctx": 8192}
 
 OPENAI_MODELS = [
     "gpt-4o-mini",
-    "gpt-5.6-sol",
+    "gpt-4o",
 ]
 
 # rewriting a follow-up into a search query is a trivial task, so it stays off

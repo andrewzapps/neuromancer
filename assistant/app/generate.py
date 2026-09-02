@@ -43,6 +43,8 @@ _ollama_client: Client | None = None
 
 @dataclass(frozen=True)
 class RewriteResult:
+    """Outcome of a query rewrite; on failure holds the original query and an error."""
+
     query: str
     rewritten: bool = False
     error: str | None = None
@@ -55,6 +57,7 @@ def _load_system_prompt() -> str:
 
 
 def sources_from_chunks(chunks: list[Candidate]) -> list[str]:
+    """Return the distinct file paths behind the chunks, for citation in the UI."""
     sources: list[str] = []
     seen: set[str] = set()
     for chunk in chunks:
@@ -194,6 +197,7 @@ def contextualize_query(
     model: str | None = None,
     api_key: str | None = None,
 ) -> RewriteResult:
+    """Rewrite a follow-up into a standalone search query; falls back to the original."""
     if not history:
         return RewriteResult(query=query)
 
@@ -229,6 +233,7 @@ def stream_from_chunks(
     model: str | None = None,
     api_key: str | None = None,
 ) -> Iterator[str]:
+    """Stream an answer grounded in the retrieved chunks."""
     messages = _build_messages(query, chunks, history=history)
     provider = (provider or LLM_PROVIDER).strip().lower()
     model = model or LLM_MODEL

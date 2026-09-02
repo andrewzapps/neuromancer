@@ -39,7 +39,6 @@ def read_jsonl(path: Path) -> list[dict]:
 
 
 def chroma_id(record: dict) -> str:
-    #creates unique chroma id for api or impl
     source_type = record["source_type"]
     base_id = record["id"]
     if source_type in ("api", "impl"):
@@ -60,6 +59,7 @@ def build_metadata(record: dict) -> dict:
 
 
 def get_embedding_function() -> OllamaEmbeddingFunction:
+    # must match the query side in app/retrieve.py, or search quality silently degrades
     return OllamaEmbeddingFunction(url=OLLAMA_URL, model_name=EMBED_MODEL)
 
 
@@ -166,6 +166,7 @@ def build_and_save_bm25_index(client: chromadb.PersistentClient) -> None:
 
 
 def main(reset: bool = False) -> None:
+    """Load every collection, then build BM25 last over what actually landed in Chroma."""
     embed_fn = get_embedding_function()
     client = chromadb.PersistentClient(path=CHROMA_PATH)
 

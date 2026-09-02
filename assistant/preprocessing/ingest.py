@@ -2,10 +2,15 @@ import ast
 import json
 import os
 import re
+import warnings
 from pathlib import Path
 import fnmatch
 
 from tqdm import tqdm
+
+# NeuroMANCER's docstrings contain LaTeX (e.g. \dot{x}, \mathcal{L}) in
+# non-raw strings; ast.parse() below evaluates those escapes and warns.
+warnings.filterwarnings("ignore", category=SyntaxWarning)
 
 ignore_directory_patterns = {
     "*/assistant",
@@ -170,7 +175,6 @@ def is_rst_underline(line):
 
 
 def is_autodoc_shell(text):
-    """Returns True when a doc file is Sphinx autodoc directives."""
     directive_lines = 0
     prose_lines = 0
 
@@ -215,7 +219,6 @@ def is_autodoc_shell(text):
 
 
 def find_rst_headers(lines):
-    #find header to chunk by sections
     headers = []
     i = 0
     while i < len(lines) - 1:
@@ -238,7 +241,6 @@ def find_md_headers(lines):
 
 
 def split_by_headers(text, file_path, headers):
-    """Chunks by headings"""
     lines = text.splitlines()
     if not lines:
         return []
@@ -254,7 +256,6 @@ def split_by_headers(text, file_path, headers):
         ]
 
     sections = []
-    #chunk anything before first heading
     if headers[0][0] > 0:
         sections.append(
             {
@@ -280,7 +281,6 @@ def split_by_headers(text, file_path, headers):
 
 
 def split_doc_sections(text, file_path):
-    """Split documentation files into section chunks at RST or Markdown headings."""
     lines = text.splitlines()
     suffix = Path(file_path).suffix.lower()
 
@@ -297,7 +297,6 @@ def split_doc_sections(text, file_path):
 
 
 def chunk_doc_file(file_path, root_path):
-    """Split hand-written documentation into section chunks"""
     suffix = Path(file_path).suffix.lower()
     if suffix not in (".rst", ".md", ".txt"):
         return []
@@ -352,7 +351,6 @@ def node_end_line(node, source_lines, siblings, idx):
 
 
 def split_large_python_example(source_lines, rel_path):
-    """Split large .py examples on top-level functions"""
     source = "\n".join(source_lines)
     tree = ast.parse(source)
     records = []
@@ -480,7 +478,6 @@ def chunk_ipynb_file(file_path, rel_path):
 
 
 def chunk_example_file(file_path, root_path):
-    """Chunk per example file and split only when very large"""
     rel_path = normalize_rel_path(file_path, root_path)
     if Path(file_path).suffix.lower() == ".ipynb":
         return chunk_ipynb_file(file_path, rel_path)
@@ -568,7 +565,6 @@ def iter_src_symbols(tree):
 
 
 def chunk_src_file(file_path, root_path):
-    """AST extraction of API signatures/docstrings and code implementations"""
     if not file_path.endswith(".py"):
         return []
 
@@ -613,7 +609,7 @@ def chunk_src_file(file_path, root_path):
 
 
 def run(root_path: str):
-
+    """Chunk a checkout into the three JSONL corpora, each with its own strategy."""
     outdir = Path(__file__).resolve().parent.parent / "knowledge"
     outdir.mkdir(exist_ok=True)
 
@@ -649,4 +645,3 @@ if __name__ == "__main__":
         else os.environ.get("NEUROMANCER_ROOT", str(default_root))
     )
     run(str(root))
-

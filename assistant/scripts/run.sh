@@ -3,14 +3,12 @@ set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
-require_command uv "Install it from https://docs.astral.sh/uv/getting-started/installation/"
+require_command streamlit "Install the assistant first: bash scripts/setup.sh"
 
 cd "${ASSISTANT_DIR}"
 
-# --- ollama ---------------------------------------------------------------
-# required even on the OpenAI provider: query embeddings always go through it
+# Required even on the OpenAI provider: query embeddings always go through it.
 ensure_ollama
-
 
 missing=()
 [ -f "chroma_store/chroma.sqlite3" ] || missing+=("chroma_store/chroma.sqlite3")
@@ -21,9 +19,8 @@ if [ "${#missing[@]}" -gt 0 ]; then
     die "Search index is missing (${missing[*]}). Run: bash scripts/setup.sh"
 fi
 
-# --- launch ---------------------------------------------------------------
 log "Starting Streamlit"
 if [ -n "${PORT:-}" ]; then
-    exec uv run streamlit run app/streamlit_app.py --server.port "${PORT}"
+    exec streamlit run app/streamlit_app.py --server.port "${PORT}"
 fi
-exec uv run streamlit run app/streamlit_app.py
+exec streamlit run app/streamlit_app.py

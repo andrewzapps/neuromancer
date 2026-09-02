@@ -10,6 +10,7 @@ from retrieve import RERANK_MODEL
 
 
 def main() -> int:
+    """Download the reranker, then re-load it offline to prove the cache is complete."""
     from sentence_transformers import CrossEncoder
 
     print(f"Fetching reranker: {RERANK_MODEL}")

@@ -50,6 +50,7 @@ def _to_math(match: re.Match, *, only_when_alone: bool = False) -> str:
 
 
 def sanitize_markdown(text: str) -> str:
+    """Normalize LaTeX delimiters to Streamlit's $/$$ form, leaving code fences alone."""
     if not text:
         return text
 
@@ -155,12 +156,14 @@ div[data-testid="stCodeBlock"] code {
 
 @st.cache_resource
 def init_rag():
+    """Load the retrieval stack once per Streamlit process."""
     warmup()
     return True
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def retrieve_and_rerank(query: str):
+    """Retrieve chunks for a query, memoized for 30 minutes."""
     return retrieve(query)
 
 
@@ -169,6 +172,7 @@ def build_status_caption(
     stream_s: float,
     rewrite: RewriteResult,
 ) -> str:
+    """Caption under an answer: timings, plus how the query was actually searched."""
     #timings and rewritten query
     caption = f"research {research_s:.1f}s  ·  stream {stream_s:.1f}s"
     if rewrite.error:
@@ -187,6 +191,7 @@ REWRITE_HISTORY_TURNS = 6
 
 
 def get_recent_context(n: int = 3) -> list[dict]:
+    """Return the last n conversation turns, trimmed to role and content."""
     return [
         {"role": m["role"], "content": m["content"]}
         for m in st.session_state.messages[-n:]
@@ -214,6 +219,7 @@ def _init_llm_session_state() -> None:
 
 @st.fragment
 def llm_sidebar() -> None:
+    """Sidebar controls for provider, model, and API key; switching clears the chat."""
     st.caption("LLM")
     provider = st.selectbox(
         "Provider",
@@ -225,9 +231,7 @@ def llm_sidebar() -> None:
         model = st.selectbox(
             "Model",
             options=OPENAI_MODELS,
-            format_func=lambda m: (
-                "Mini (gpt-4o-mini)" if m == "gpt-4o-mini" else "Sol (gpt-5.6-sol)"
-            ),
+            format_func=lambda m: "Mini (gpt-4o-mini)" if m == "gpt-4o-mini" else m,
             key="openai_model_choice",
         )
         api_key = st.text_input(
