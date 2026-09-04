@@ -67,6 +67,9 @@ export NEUROMANCER_LLM_PROVIDER="${PROVIDER}"
 
 NEUROMANCER_ROOT="${NEUROMANCER_ROOT:-$(cd "${ASSISTANT_DIR}/.." && pwd)}"
 
+# Before anything is announced, so an unusable interpreter fails immediately.
+check_python_version
+
 # Announce the download size
 if [ "${PROVIDER}" = "openai" ]; then
     log "Mode: API (OpenAI-compatible endpoint)"
@@ -85,8 +88,6 @@ if [ "${PROVIDER}" = "openai" ] && [ "${KEY_LATER}" != "1" ] && [ -z "${OPENAI_A
   Then re-run this script. To set the key in the app sidebar instead of the
   environment, re-run with:  bash scripts/setup.sh --api --key-later"
 fi
-
-check_python_version
 
 cd "${ASSISTANT_DIR}"
 

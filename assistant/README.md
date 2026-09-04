@@ -3,8 +3,18 @@
 A retrieval-augmented assistant for [NeuroMANCER](https://github.com/pnnl/neuromancer).
 It answers questions about the library's API, documentation, and examples, grounded in
 this repository — it chunks the source, docs, and notebooks, embeds them into a local
-search index, and serves a chat UI over the result.
+search index, and serves a chat UI over the result. It runs entirely on your machine, or
+against an OpenAI-compatible API if you would rather not download a local model.
 
+## Table of Contents
+1. [Prerequisites](#prerequisites)
+2. [Choose Your Install](#choose-your-install)
+3. [Installation](#installation)
+4. [Running the Assistant](#running-the-assistant)
+5. [Configuration](#configuration)
+6. [Troubleshooting](#troubleshooting)
+7. [How It Works](#how-it-works)
+8. [Development](#development)
 
 ---
 
@@ -14,7 +24,7 @@ search index, and serves a chat UI over the result.
 
 [**Install Ollama**](https://ollama.com/download).
 
-```sh
+```bash
 brew install ollama                              # macOS
 curl -fsSL https://ollama.com/install.sh | sh    # Linux
 winget install Ollama.Ollama                     # Windows (PowerShell)
@@ -22,7 +32,7 @@ winget install Ollama.Ollama                     # Windows (PowerShell)
 
 Check it is on your PATH before continuing:
 
-```sh
+```bash
 ollama --version
 ```
 
@@ -30,19 +40,20 @@ Ollama is required in **both** installation modes, including the API mode below.
 embeddings always run locally through Ollama; only the *answers* can be delegated to an
 API. The setup and run scripts start `ollama serve` for you if it is not already running.
 
-### 2. Everything else
+### 2. Everything Else
 
 | | |
 |---|---|
 | Python | 3.11 or newer (NeuroMANCER itself supports 3.9+, but the assistant needs 3.11+) |
 | Shell | bash — on Windows use **WSL** or **Git Bash**; the scripts do not run in PowerShell |
 | RAM | 8 GB minimum, 16 GB recommended |
+| Disk | ~6.5 GB local mode, ~1.5 GB API mode (models plus the search index) |
 | GPU | optional; speeds up local models but is not required |
 | Network | first setup only, to download models |
 
 ---
 
-## Choose your install
+## Choose Your Install
 
 The only meaningful difference is the 4.9 GB answering model.
 
@@ -61,10 +72,9 @@ Pick **API** if you already have an OpenAI key and would rather not store a 5 GB
 
 ---
 
-## Install
+## Installation
 
-
-```sh
+```bash
 git clone https://github.com/pnnl/neuromancer.git
 cd neuromancer
 
@@ -74,7 +84,7 @@ conda activate neuromancer
 
 Then run the setup for your chosen mode:
 
-```sh
+```bash
 # Local — everything on this machine, ~6.3 GB
 bash assistant/scripts/setup.sh
 
@@ -85,7 +95,8 @@ bash assistant/scripts/setup.sh --api
 
 `setup.sh` installs dependencies, downloads the models for your mode, chunks the
 repository, and builds the search index. It prints what it is about to download before it
-starts, so you can back out.
+starts, so you can back out. The first run is the slow one — most of the time goes on
+downloading models and embedding chunks.
 
 To enter your API key in the app's sidebar instead of the environment, use
 `bash assistant/scripts/setup.sh --api --key-later`.
@@ -97,7 +108,7 @@ To enter your API key in the app's sidebar instead of the environment, use
 else and is present in every environment. To use [uv](https://docs.astral.sh/uv/)
 instead — it works and is considerably faster — set `NEUROMANCER_INSTALLER=uv`:
 
-```sh
+```bash
 bash assistant/scripts/setup.sh                             # pip (default)
 NEUROMANCER_INSTALLER=uv bash assistant/scripts/setup.sh    # uv
 ```
@@ -105,7 +116,7 @@ NEUROMANCER_INSTALLER=uv bash assistant/scripts/setup.sh    # uv
 Either way, the install step is the equivalent of running this from the repository
 root, into your active environment:
 
-```sh
+```bash
 pip install -e ".[assistant]"        # or: uv pip install -e ".[assistant]"
 ```
 
@@ -114,14 +125,18 @@ Skip the step entirely with `bash assistant/scripts/setup.sh --skip-deps`.
 
 ---
 
-## Run
+## Running the Assistant
 
-```sh
+```bash
 bash assistant/scripts/run.sh
 ```
 
-This starts Ollama if needed and opens the UI at <http://localhost:8501>. Set `PORT` to
-use a different port.
+This starts Ollama if needed and serves the UI at <http://localhost:8501> — open that
+address in your browser. Set `PORT` to use a different port.
+
+Ask questions in plain language — "how do I define a constraint?", "what does
+`Trainer.fit` do?", "show me a DPC example". Each answer cites the files it drew from, so
+you can jump to the source.
 
 Re-run `setup.sh` whenever the NeuroMANCER source, docs, or examples change — it re-chunks
 and rebuilds the index from scratch.
@@ -148,7 +163,116 @@ Provider and model can also be switched at runtime from the app's sidebar.
 
 ---
 
-## Project layout
+## Troubleshooting
+
+**`ollama is not installed or not on PATH`** — install it with the command for your OS
+in [Prerequisites](#1-ollama-required). The assistant cannot run without it, even in API
+mode.
+
+**`Ollama did not become healthy within 30s`** — the server was started but never
+answered. Check the log path printed alongside the error, then try running `ollama serve`
+in a separate terminal to see the failure directly.
+
+**`The assistant needs Python 3.11+`** — your active environment is older. NeuroMANCER
+supports 3.9+, so this may be deliberate; create a separate environment for the assistant:
+
+```bash
+conda create -n neuromancer-gpt python=3.11 -y && conda activate neuromancer-gpt
+```
+
+**`No virtual environment detected`** — you are about to install into the system Python.
+Activate a conda or venv environment first, or confirm the prompt if that is what you want.
+
+**`API mode needs an API key, but OPENAI_API_KEY is not set`** — export the key before
+running setup, or pass `--key-later` to enter it in the sidebar instead. Note that
+exporting it in one terminal does not carry into another.
+
+**`Failed to pull llama3.1:8b`** — the model download was interrupted. Ollama resumes
+where it left off, so simply re-run `setup.sh`. To watch progress directly, run
+`ollama pull llama3.1:8b` yourself first.
+
+**`Search index is missing`** — `run.sh` was called before `setup.sh` finished. Re-run
+`bash assistant/scripts/setup.sh`.
+
+**`BM25 index unavailable`** — the index is stale or corrupt, usually because the corpus
+was re-chunked without rebuilding. Re-run `bash assistant/scripts/setup.sh`, which
+rebuilds both halves together.
+
+**Port 8501 is already in use** — another Streamlit app is running. Either stop it, or
+start on a different port with `PORT=8502 bash assistant/scripts/run.sh`.
+
+**Answers are slow on the local model** — `llama3.1:8b` needs roughly 8 GB of RAM. Either
+use `--api` mode, or set `NEUROMANCER_LLM_MODEL` to something smaller such as
+`llama3.2:3b`.
+
+---
+
+## How It Works
+
+The assistant works in two phases: it indexes the repository once during setup, then
+searches that index on every question.
+
+### Indexing, once, during `setup.sh`
+
+```mermaid
+flowchart LR
+    R[("NeuroMANCER repo<br/>src · docs · examples")] --> I["ingest.py<br/>chunk by symbol and section"]
+    I --> J[("knowledge/*.jsonl")]
+    J --> L["load_vector_store.py"]
+    L -->|"embed with nomic-embed-text"| C[("Chroma<br/>3 collections")]
+    L --> B[("BM25 index")]
+```
+
+Chunks follow structure rather than a fixed character count: Python is split per class
+and function, documentation per heading, notebooks so each markdown cell stays with the
+code it explains. Every chunk is then embedded and written to two indexes over the same
+text — a vector store for meaning, a keyword index for exact terms.
+
+This creates `knowledge/` and `chroma_store/` — roughly 1,900 chunks and 34 MB for a
+current checkout, though repeated rebuilds grow the store since SQLite does not reclaim
+space. Both are generated and untracked; delete them and the next `setup.sh` rebuilds
+them.
+
+### Answering, on every question
+
+```mermaid
+flowchart TB
+    Q["User question"] --> RW["contextualize_query<br/>rewrite follow-up using chat history"]
+    RW --> CQ["clean_query"]
+    CQ --> D["dense_search<br/>Chroma vector similarity"]
+    CQ --> S["sparse_search<br/>BM25 keyword match"]
+    CQ --> SY["symbol_search<br/>exact hits, e.g. Trainer.fit"]
+    D --> M["hybrid_merge<br/>reciprocal rank fusion"]
+    S --> M
+    M --> U["union, deduplicated by id"]
+    SY --> U
+    U --> RR["rerank<br/>bge-reranker-base cross-encoder"]
+    RR --> F["drop chunks far below the best match<br/>keep top_k (default 8)"]
+    F --> G["stream_from_chunks<br/>llama3.1:8b or an OpenAI model"]
+    G --> A["Answer, with its sources cited"]
+```
+
+Search is hybrid because each strategy fails differently: vector similarity handles
+paraphrase but blurs rare identifiers, keyword search catches those, and symbol lookup
+covers an API name typed verbatim. The results are fused, reranked, and trimmed — chunks
+scoring far below the best match are dropped rather than padded out to a fixed count, so
+a narrow question returns few sources instead of several irrelevant ones.
+
+---
+
+## Development
+
+```bash
+pip install -e ".[tests]"        # pytest + hypothesis, from the repository root
+pytest assistant/tests
+```
+
+The suite runs in about a second and needs neither Ollama nor a built index — every
+client is stubbed, and a fixture fails any test that opens a real connection. One test is
+marked `xfail`: it records a known bug where a notebook ending in a short markdown-only
+cell loses that text during ingestion. Fixing it changes chunk ids and so requires a
+re-ingest, which is why it is documented rather than patched. The marker is strict, so
+the run turns red once someone fixes it.
 
 ```
 assistant/
@@ -156,36 +280,6 @@ assistant/
   preprocessing/  chunking (ingest.py) and index building (load_vector_store.py)
   prompts/        system/rewrite prompt templates
   scripts/        setup.sh / run.sh entry points + shared shell helpers
+  tests/          pytest suite
   .streamlit/     Streamlit theme and server config
 ```
-
-Two directories are generated by `setup.sh` and are not tracked in git:
-`knowledge/` (the chunked corpus, as JSONL) and `chroma_store/` (the Chroma vector
-database and the BM25 index).
-
-`.streamlit/` is a dot-directory because Streamlit only reads its configuration from that
-exact path — it is a framework convention, not a preference.
-
----
-
-## Troubleshooting
-
-**`ollama is not installed or not on PATH`** — install it with the command for your OS
-above. The assistant cannot run without it, even in API mode.
-
-**`The assistant needs Python 3.11+`** — your active environment is older. NeuroMANCER
-supports 3.9+, so this may be deliberate; create a separate environment for the assistant:
-
-```sh
-conda create -n neuromancer-gpt python=3.11 -y && conda activate neuromancer-gpt
-```
-
-**`Search index is missing`** — `run.sh` was called before `setup.sh` finished. Re-run
-`bash assistant/scripts/setup.sh`.
-
-**`No virtual environment detected`** — you are about to install into the system Python.
-Activate a conda or venv environment first, or confirm the prompt if that is what you want.
-
-**Answers are slow on the local model** — `llama3.1:8b` needs roughly 8 GB of RAM. Either
-use `--api` mode, or set `NEUROMANCER_LLM_MODEL` to something smaller such as
-`llama3.2:3b`.
