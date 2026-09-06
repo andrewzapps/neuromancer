@@ -25,6 +25,10 @@ def test_iter_src_symbols_yields_class_then_methods_but_not_nested():
         ('def __init__(self):\n    """Docs."""', "__init__", True),
         ("def __init__(self, lr): ...", "__init__", True),
         ("def __init__(self): ...", "__init__", False),
+        ("def _set_barrier(self, barrier): ...", "_set_barrier", True),
+        ('def _reset(self):\n    """Docs."""', "_reset", True),
+        ("def __repr__(self): ...", "__repr__", False),
+        ('def __repr__(self):\n    """Docs."""', "__repr__", False),
     ],
 )
 def test_should_index_symbol(source, name, indexed):

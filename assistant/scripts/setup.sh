@@ -5,7 +5,6 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 PROVIDER="${NEUROMANCER_LLM_PROVIDER:-ollama}"
-KEY_LATER=0
 
 usage() {
     cat <<'EOF'
@@ -22,24 +21,18 @@ Installation modes:
                   bge-reranker-base   1.1 GB   reranking
                   llama3.1:8b         4.9 GB   answers
 
-  --api       API -- answers come from an OpenAI-compatible endpoint, so the
-              4.9 GB model is SKIPPED. Downloads ~1.4 GB. Requires
-              OPENAI_API_KEY. Ollama is still required: query embeddings
-              always run locally.
+  --api       API -- the 4.9 GB answering model is SKIPPED and answers come
+              from an OpenAI-compatible endpoint instead. Downloads ~1.4 GB.
+              Enter your API key in the app sidebar once it is running.
+              Ollama is still required: query embeddings always run locally.
 
 Options:
-  --api                 Shorthand for --provider openai
-  --provider PROVIDER   "ollama" (default) or "openai"
-  --key-later           In API mode, skip the OPENAI_API_KEY check and enter
-                        the key in the app sidebar instead
-  --skip-deps           Do not install Python dependencies
+  --api                 Skip the local answering model
   -h, --help            Show this message
 
 Environment:
-  OPENAI_API_KEY          API key, required by --api
   OPENAI_BASE_URL         Endpoint override (Azure, vLLM, OpenRouter, ...)
   NEUROMANCER_LLM_MODEL   Override the answering model
-  NEUROMANCER_INSTALLER   Set to "uv" to install with uv instead of pip
   NEUROMANCER_ROOT        Repository to index (defaults to this checkout)
 EOF
 }
@@ -47,10 +40,6 @@ EOF
 while [ $# -gt 0 ]; do
     case "$1" in
         --api|--openai)  PROVIDER="openai" ;;
-        --provider)      shift; PROVIDER="${1:-}" ;;
-        --provider=*)    PROVIDER="${1#*=}" ;;
-        --key-later)     KEY_LATER=1 ;;
-        --skip-deps)     SKIP_DEPS=1 ;;
         -h|--help)       usage; exit 0 ;;
         *)               die "Unknown option: $1 (try --help)" ;;
     esac
@@ -75,32 +64,20 @@ if [ "${PROVIDER}" = "openai" ]; then
     log "Mode: API (OpenAI-compatible endpoint)"
     log "  Will download ~1.4 GB (embeddings + reranker)"
     log "  Skipping llama3.1:8b (4.9 GB) -- answers come from the API"
+    log "  Enter your API key in the app sidebar after setup finishes"
 else
     log "Mode: Local (everything on this machine)"
     log "  Will download ~6.3 GB (embeddings + reranker + llama3.1:8b)"
     log "  For a ~1.4 GB install using your own API key instead, re-run with --api"
 fi
 
-# Fail before the download and the index build, not after.
-if [ "${PROVIDER}" = "openai" ] && [ "${KEY_LATER}" != "1" ] && [ -z "${OPENAI_API_KEY:-}" ]; then
-    die "API mode needs an API key, but OPENAI_API_KEY is not set.
-      export OPENAI_API_KEY=sk-...
-  Then re-run this script. To set the key in the app sidebar instead of the
-  environment, re-run with:  bash scripts/setup.sh --api --key-later"
-fi
-
 cd "${ASSISTANT_DIR}"
 
 # Installs into the active environment; no virtualenv is created here.
-if [ "${SKIP_DEPS:-0}" = "1" ]; then
-    log "Skipping dependency install (--skip-deps)"
-else
-    warn_if_no_env
-    read -r -a INSTALL_CMD <<< "$(detect_installer)"
-    log "Installing dependencies with ${INSTALL_CMD[*]} into $(python -c 'import sys; print(sys.prefix)')"
-    (cd "${NEUROMANCER_ROOT}" && "${INSTALL_CMD[@]}" install -e ".[assistant]") \
-        || die "Dependency install failed"
-fi
+warn_if_no_env
+log "Installing dependencies into $(python -c 'import sys; print(sys.prefix)')"
+(cd "${NEUROMANCER_ROOT}" && python -m pip install -e ".[assistant]") \
+    || die "Dependency install failed"
 
 ensure_ollama
 

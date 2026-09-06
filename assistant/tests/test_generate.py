@@ -28,9 +28,10 @@ def fake_openai(calls, reply=None, deltas=None, error=None):
             choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
         )
 
-    def create(model, messages, stream=False):
+    def create(model, messages, stream=False, temperature=None):
         calls["model"] = model
         calls["messages"] = messages
+        calls["temperature"] = temperature
         if error is not None:
             raise error
         if stream:
@@ -51,11 +52,14 @@ def delta(content):
     )
 
 
-def chunk(file_path, document=""):
+def chunk(file_path, document="", impl=None):
+    metadata = {"file_path": file_path}
+    if impl is not None:
+        metadata["impl"] = impl
     return retrieve.Candidate(
         id=str(file_path),
         document=document,
-        metadata={"file_path": file_path},
+        metadata=metadata,
         collection_name="neuromancer_src",
     )
 
@@ -150,6 +154,31 @@ def test_build_messages_truncates_oversized_chunks():
     assert "z" * (limit + 1) not in content["content"]
 
 
+def test_build_messages_includes_the_implementation_source():
+    chunks = [chunk("loss.py", "BarrierLoss docstring", impl="def _set_barrier(self):")]
+
+    content = generate._build_messages("q", chunks)[-1]["content"]
+
+    assert "BarrierLoss docstring" in content
+    assert "def _set_barrier(self):" in content
+
+
+def test_build_messages_truncates_oversized_implementations():
+    limit = generate.MAX_CONTEXT_IMPL_CHARS
+    chunks = [chunk("a.py", "doc", impl="z" * (limit + 500))]
+
+    content = generate._build_messages("q", chunks)[-1]["content"]
+
+    assert "z" * limit in content
+    assert "z" * (limit + 1) not in content
+
+
+def test_build_messages_omits_the_code_fence_without_an_implementation():
+    content = generate._build_messages("q", [chunk("a.py", "doc")])[-1]["content"]
+
+    assert "```python" not in content
+
+
 def test_contextualize_openai_uses_the_cheap_rewrite_model(monkeypatch):
     calls = {}
     monkeypatch.setattr(generate, "OpenAI", fake_openai(calls, reply="rewritten query"))
@@ -165,6 +194,20 @@ def test_contextualize_openai_uses_the_cheap_rewrite_model(monkeypatch):
     assert calls["model"] == generate.OPENAI_REWRITE_MODEL
     assert calls["model"] != "gpt-4o"
     assert result.query == "rewritten query"
+
+
+def test_contextualize_openai_rewrites_deterministically(monkeypatch):
+    calls = {}
+    monkeypatch.setattr(generate, "OpenAI", fake_openai(calls, reply="rewritten query"))
+
+    generate.contextualize_query(
+        "follow up",
+        history=[{"role": "user", "content": "prior"}],
+        provider="openai",
+        api_key="sk-test",
+    )
+
+    assert calls["temperature"] == 0
 
 
 def test_contextualize_openai_falls_back_on_api_error(monkeypatch):

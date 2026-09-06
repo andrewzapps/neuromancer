@@ -14,7 +14,6 @@ against an OpenAI-compatible API if you would rather not download a local model.
 5. [Configuration](#configuration)
 6. [Troubleshooting](#troubleshooting)
 7. [How It Works](#how-it-works)
-8. [Development](#development)
 
 ---
 
@@ -63,7 +62,7 @@ The only meaningful difference is the 4.9 GB answering model.
 | `nomic-embed-text` — embeddings | 274 MB | 274 MB |
 | `bge-reranker-base` — reranking | 1.1 GB | 1.1 GB |
 | `llama3.1:8b` — answers | **4.9 GB** | **skipped** |
-| `OPENAI_API_KEY` | not needed | **required** |
+| API key | not needed | entered in the app sidebar |
 | **First-run download** | **~6.3 GB** | **~1.4 GB** |
 | Running cost | free, offline after setup | per-token, needs network |
 
@@ -87,9 +86,10 @@ Then run the setup for your chosen mode:
 ```bash
 # Local — everything on this machine, ~6.3 GB
 bash assistant/scripts/setup.sh
+```
 
-# API — bring your own key, ~1.4 GB
-export OPENAI_API_KEY=sk-...
+```bash
+# API — no local answering model, ~1.4 GB
 bash assistant/scripts/setup.sh --api
 ```
 
@@ -98,30 +98,8 @@ repository, and builds the search index. It prints what it is about to download 
 starts, so you can back out. The first run is the slow one — most of the time goes on
 downloading models and embedding chunks.
 
-To enter your API key in the app's sidebar instead of the environment, use
-`bash assistant/scripts/setup.sh --api --key-later`.
-
-<details>
-<summary>Installing dependencies yourself</summary>
-
-`setup.sh` installs with pip by default, which is what NeuroMANCER uses everywhere
-else and is present in every environment. To use [uv](https://docs.astral.sh/uv/)
-instead — it works and is considerably faster — set `NEUROMANCER_INSTALLER=uv`:
-
-```bash
-bash assistant/scripts/setup.sh                             # pip (default)
-NEUROMANCER_INSTALLER=uv bash assistant/scripts/setup.sh    # uv
-```
-
-Either way, the install step is the equivalent of running this from the repository
-root, into your active environment:
-
-```bash
-pip install -e ".[assistant]"        # or: uv pip install -e ".[assistant]"
-```
-
-Skip the step entirely with `bash assistant/scripts/setup.sh --skip-deps`.
-</details>
+In API mode there is nothing else to set up: start the app, pick **OpenAI** in the
+sidebar, and paste your key into the field below it.
 
 ---
 
@@ -150,16 +128,17 @@ All configuration is via environment variables; defaults live in `app/settings.p
 | Variable | Default | Purpose |
 |---|---|---|
 | `NEUROMANCER_LLM_PROVIDER` | `ollama` | `ollama` or `openai` |
-| `NEUROMANCER_LLM_MODEL` | `llama3.1:8b` / `gpt-4o-mini` | Answering model |
-| `OPENAI_API_KEY` | — | Required when the provider is `openai` |
+| `NEUROMANCER_LLM_MODEL` | `llama3.1:8b` / `gpt-5.6` | Answering model |
+| `NEUROMANCER_OPENAI_MODELS` | `gpt-5.6` | Comma-separated model list offered in the sidebar |
+| `OPENAI_API_KEY` | — | Optional; pre-fills the sidebar key field |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Point at any OpenAI-compatible endpoint (Azure, vLLM, OpenRouter, LM Studio) |
 | `NEUROMANCER_TOP_K` | `8` | Chunks passed to the model as context |
 | `OLLAMA_URL` | `http://localhost:11434` | Where Ollama is listening |
 | `NEUROMANCER_ROOT` | this checkout | Repository to index |
 | `PORT` | `8501` | Streamlit port |
-| `NEUROMANCER_INSTALLER` | `pip` | Set to `uv` to install with uv instead |
 
-Provider and model can also be switched at runtime from the app's sidebar.
+Provider, model, and API key can all be set at runtime from the app's sidebar; none of
+these variables are required.
 
 ---
 
@@ -169,10 +148,6 @@ Provider and model can also be switched at runtime from the app's sidebar.
 in [Prerequisites](#1-ollama-required). The assistant cannot run without it, even in API
 mode.
 
-**`Ollama did not become healthy within 30s`** — the server was started but never
-answered. Check the log path printed alongside the error, then try running `ollama serve`
-in a separate terminal to see the failure directly.
-
 **`The assistant needs Python 3.11+`** — your active environment is older. NeuroMANCER
 supports 3.9+, so this may be deliberate; create a separate environment for the assistant:
 
@@ -180,26 +155,12 @@ supports 3.9+, so this may be deliberate; create a separate environment for the 
 conda create -n neuromancer-gpt python=3.11 -y && conda activate neuromancer-gpt
 ```
 
-**`No virtual environment detected`** — you are about to install into the system Python.
-Activate a conda or venv environment first, or confirm the prompt if that is what you want.
+**`OpenAI API key missing`** — the sidebar is set to OpenAI but the key field is empty.
+Paste your key into it. Switching the provider clears the chat, so do it before asking
+anything you want to keep.
 
-**`API mode needs an API key, but OPENAI_API_KEY is not set`** — export the key before
-running setup, or pass `--key-later` to enter it in the sidebar instead. Note that
-exporting it in one terminal does not carry into another.
-
-**`Failed to pull llama3.1:8b`** — the model download was interrupted. Ollama resumes
-where it left off, so simply re-run `setup.sh`. To watch progress directly, run
-`ollama pull llama3.1:8b` yourself first.
-
-**`Search index is missing`** — `run.sh` was called before `setup.sh` finished. Re-run
-`bash assistant/scripts/setup.sh`.
-
-**`BM25 index unavailable`** — the index is stale or corrupt, usually because the corpus
-was re-chunked without rebuilding. Re-run `bash assistant/scripts/setup.sh`, which
-rebuilds both halves together.
-
-**Port 8501 is already in use** — another Streamlit app is running. Either stop it, or
-start on a different port with `PORT=8502 bash assistant/scripts/run.sh`.
+**`Search index is missing`** or **`BM25 index unavailable`** — `run.sh` ran before
+`setup.sh` finished, or the index is stale. Re-run `bash assistant/scripts/setup.sh`.
 
 **Answers are slow on the local model** — `llama3.1:8b` needs roughly 8 GB of RAM. Either
 use `--api` mode, or set `NEUROMANCER_LLM_MODEL` to something smaller such as
@@ -214,14 +175,11 @@ searches that index on every question.
 
 ### Indexing, once, during `setup.sh`
 
-```mermaid
-flowchart LR
-    R[("NeuroMANCER repo<br/>src · docs · examples")] --> I["ingest.py<br/>chunk by symbol and section"]
-    I --> J[("knowledge/*.jsonl")]
-    J --> L["load_vector_store.py"]
-    L -->|"embed with nomic-embed-text"| C[("Chroma<br/>3 collections")]
-    L --> B[("BM25 index")]
-```
+> NeuroMANCER repo (src · docs · examples)
+> → `ingest.py` chunks it by symbol and section
+> → `knowledge/*.jsonl`
+> → `load_vector_store.py` embeds with `nomic-embed-text`
+> → **Chroma** (3 collections) + **BM25 index**
 
 Chunks follow structure rather than a fixed character count: Python is split per class
 and function, documentation per heading, notebooks so each markdown cell stays with the
@@ -235,22 +193,16 @@ them.
 
 ### Answering, on every question
 
-```mermaid
-flowchart TB
-    Q["User question"] --> RW["contextualize_query<br/>rewrite follow-up using chat history"]
-    RW --> CQ["clean_query"]
-    CQ --> D["dense_search<br/>Chroma vector similarity"]
-    CQ --> S["sparse_search<br/>BM25 keyword match"]
-    CQ --> SY["symbol_search<br/>exact hits, e.g. Trainer.fit"]
-    D --> M["hybrid_merge<br/>reciprocal rank fusion"]
-    S --> M
-    M --> U["union, deduplicated by id"]
-    SY --> U
-    U --> RR["rerank<br/>bge-reranker-base cross-encoder"]
-    RR --> F["drop chunks far below the best match<br/>keep top_k (default 8)"]
-    F --> G["stream_from_chunks<br/>llama3.1:8b or an OpenAI model"]
-    G --> A["Answer, with its sources cited"]
-```
+> **User question**
+> → `contextualize_query` rewrites a follow-up using chat history → `clean_query`
+> → three searches in parallel:
+>   `dense_search` (Chroma vector similarity), `sparse_search` (BM25 keyword match),
+>   `symbol_search` (exact hits, e.g. `Trainer.fit`)
+> → `hybrid_merge` fuses dense + sparse by reciprocal rank, then unions the symbol
+>   hits and deduplicates by id
+> → `rerank` with the `bge-reranker-base` cross-encoder
+> → drop chunks far below the best match, keep `top_k` (default 8)
+> → `stream_from_chunks` → **answer, with its sources cited**
 
 Search is hybrid because each strategy fails differently: vector similarity handles
 paraphrase but blurs rare identifiers, keyword search catches those, and symbol lookup
@@ -258,28 +210,3 @@ covers an API name typed verbatim. The results are fused, reranked, and trimmed 
 scoring far below the best match are dropped rather than padded out to a fixed count, so
 a narrow question returns few sources instead of several irrelevant ones.
 
----
-
-## Development
-
-```bash
-pip install -e ".[tests]"        # pytest + hypothesis, from the repository root
-pytest assistant/tests
-```
-
-The suite runs in about a second and needs neither Ollama nor a built index — every
-client is stubbed, and a fixture fails any test that opens a real connection. One test is
-marked `xfail`: it records a known bug where a notebook ending in a short markdown-only
-cell loses that text during ingestion. Fixing it changes chunk ids and so requires a
-re-ingest, which is why it is documented rather than patched. The marker is strict, so
-the run turns red once someone fixes it.
-
-```
-assistant/
-  app/            retrieval, generation, settings, the Streamlit UI
-  preprocessing/  chunking (ingest.py) and index building (load_vector_store.py)
-  prompts/        system/rewrite prompt templates
-  scripts/        setup.sh / run.sh entry points + shared shell helpers
-  tests/          pytest suite
-  .streamlit/     Streamlit theme and server config
-```

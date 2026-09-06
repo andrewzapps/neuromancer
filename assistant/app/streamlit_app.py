@@ -166,7 +166,6 @@ def llm_sidebar() -> None:
         model = st.selectbox(
             "Model",
             options=OPENAI_MODELS,
-            format_func=lambda m: "Mini (gpt-4o-mini)" if m == "gpt-4o-mini" else m,
             key="openai_model_choice",
         )
         api_key = st.text_input(

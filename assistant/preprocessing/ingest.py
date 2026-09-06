@@ -513,16 +513,20 @@ def chunk_example_file(file_path, root_path):
     return records
 
 
+def has_doc_or_params(node):
+    doc = ast.get_docstring(node)
+    has_params = (
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and len(node.args.args) > 1
+    )
+    return bool(doc and doc.strip()) or has_params
+
+
 def should_index_symbol(name, node):
-    if name.startswith("_") and name != "__init__":
+    if name.startswith("__") and name != "__init__":
         return False
-    if name == "__init__":
-        doc = ast.get_docstring(node)
-        has_params = (
-            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and len(node.args.args) > 1
-        )
-        return bool(doc and doc.strip()) or has_params
+    if name.startswith("_"):
+        return has_doc_or_params(node)
     return True
 
 

@@ -20,7 +20,7 @@ EMBED_MODEL = "nomic-embed-text"
 # "ollama" (local) or "openai" (uses OPENAI_API_KEY)
 LLM_PROVIDER = os.environ.get("NEUROMANCER_LLM_PROVIDER", "ollama").strip().lower()
 if LLM_PROVIDER == "openai":
-    LLM_MODEL = os.environ.get("NEUROMANCER_LLM_MODEL", "gpt-4o-mini")
+    LLM_MODEL = os.environ.get("NEUROMANCER_LLM_MODEL", "gpt-5.6")
 else:
     LLM_MODEL = os.environ.get("NEUROMANCER_LLM_MODEL", "llama3.1:8b")
     LLM_PROVIDER = "ollama"
@@ -30,12 +30,15 @@ OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
 
 OLLAMA_CHAT_OPTIONS = {"num_ctx": 8192}
 
-OPENAI_MODELS = [
-    "gpt-4o-mini",
-    "gpt-4o",
-]
 
-# rewriting a follow-up into a search query is a trivial task, so it stays off
+DEFAULT_OPENAI_MODELS = "gpt-5.6"
+OPENAI_MODELS = [
+    model.strip()
+    for model in os.environ.get("NEUROMANCER_OPENAI_MODELS", DEFAULT_OPENAI_MODELS).split(",")
+    if model.strip()
+] or [DEFAULT_OPENAI_MODELS]
+
+# not a reasoning model: this runs before every retrieval
 OPENAI_REWRITE_MODEL = os.environ.get("NEUROMANCER_REWRITE_MODEL", "gpt-4o-mini")
 
 

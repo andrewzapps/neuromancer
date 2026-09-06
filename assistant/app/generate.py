@@ -29,6 +29,12 @@ MAX_REWRITTEN_QUERY_CHARS = 300
 MAX_HISTORY_TURN_CHARS = 600
 
 
+MAX_CONTEXT_IMPL_CHARS = 2000
+
+
+REWRITE_TEMPERATURE = 0
+
+
 REWRITE_ERRORS = (
     ConnectionError,
     TimeoutError,
@@ -69,6 +75,27 @@ def sources_from_chunks(chunks: list[Candidate]) -> list[str]:
     return sources
 
 
+def _truncate(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}\n... (truncated)"
+
+
+def _format_chunk(chunk: Candidate) -> str:
+    file_path = chunk.metadata.get("file_path", "unknown")
+    symbol_name = chunk.metadata.get("symbol_name")
+    header = f"### {file_path}"
+    if symbol_name and symbol_name != "unknown":
+        header += f" — {symbol_name}"
+
+    section = f"{header}\n\n{_truncate(chunk.document, MAX_CONTEXT_CHUNK_CHARS)}"
+
+    impl = chunk.metadata.get("impl")
+    if not impl:
+        return section
+    return f"{section}\n\n```python\n{_truncate(impl, MAX_CONTEXT_IMPL_CHARS)}\n```"
+
+
 def _build_messages(
     query: str,
     chunks: list[Candidate],
@@ -77,13 +104,7 @@ def _build_messages(
     chunk_sections: list[str] = []
 
     for chunk in chunks:
-        file_path = chunk.metadata.get("file_path", "unknown")
-        symbol_name = chunk.metadata.get("symbol_name")
-        header = f"### {file_path}"
-        if symbol_name and symbol_name != "unknown":
-            header += f" — {symbol_name}"
-        section = f"{header}\n\n{chunk.document[:MAX_CONTEXT_CHUNK_CHARS]}"
-        chunk_sections.append(section)
+        chunk_sections.append(_format_chunk(chunk))
 
     context_block = "\n\n---\n\n".join(chunk_sections)
     user_content = (
@@ -176,7 +197,11 @@ def _complete_openai(messages: list[dict], model: str, api_key: str) -> str:
         raise ValueError("OpenAI API key missing")
 
     client = OpenAI(api_key=api_key, base_url=OPENAI_BASE_URL)
-    response = client.chat.completions.create(model=model, messages=messages)
+    response = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        temperature=REWRITE_TEMPERATURE,
+    )
     return response.choices[0].message.content or ""
 
 
@@ -184,7 +209,7 @@ def _complete_ollama(messages: list[dict], model: str) -> str:
     response = _get_ollama_client().chat(
         model=model,
         messages=messages,
-        options=OLLAMA_CHAT_OPTIONS,
+        options={**OLLAMA_CHAT_OPTIONS, "temperature": REWRITE_TEMPERATURE},
     )
     return response.message.content or ""
 

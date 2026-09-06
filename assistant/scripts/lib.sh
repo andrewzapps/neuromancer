@@ -68,23 +68,6 @@ ensure_ollama_model() {
     ollama pull "${model}" || die "Failed to pull ${model}"
 }
 
-# pip by default because it is present in every environment; uv is faster, opt in
-# with NEUROMANCER_INSTALLER=uv.
-detect_installer() {
-    case "${NEUROMANCER_INSTALLER:-pip}" in
-        pip)
-            printf 'python -m pip'
-            ;;
-        uv)
-            require_command uv "Install it from https://docs.astral.sh/uv/getting-started/installation/"
-            printf 'uv pip'
-            ;;
-        *)
-            die "Unknown NEUROMANCER_INSTALLER: '${NEUROMANCER_INSTALLER}' (expected 'pip' or 'uv')"
-            ;;
-    esac
-}
-
 check_python_version() {
     command -v python >/dev/null 2>&1 \
         || die "python is not on PATH. Activate the environment you want to install into first."
