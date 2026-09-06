@@ -175,11 +175,14 @@ searches that index on every question.
 
 ### Indexing, once, during `setup.sh`
 
-> NeuroMANCER repo (src · docs · examples)
-> → `ingest.py` chunks it by symbol and section
-> → `knowledge/*.jsonl`
-> → `load_vector_store.py` embeds with `nomic-embed-text`
-> → **Chroma** (3 collections) + **BM25 index**
+```mermaid
+flowchart LR
+    R[("NeuroMANCER repo<br/>src · docs · examples")] --> I["ingest.py<br/>chunk by symbol and section"]
+    I --> J[("knowledge/*.jsonl")]
+    J --> L["load_vector_store.py"]
+    L -->|"embed with nomic-embed-text"| C[("Chroma<br/>3 collections")]
+    L --> B[("BM25 index")]
+```
 
 Chunks follow structure rather than a fixed character count: Python is split per class
 and function, documentation per heading, notebooks so each markdown cell stays with the
@@ -193,16 +196,22 @@ them.
 
 ### Answering, on every question
 
-> **User question**
-> → `contextualize_query` rewrites a follow-up using chat history → `clean_query`
-> → three searches in parallel:
->   `dense_search` (Chroma vector similarity), `sparse_search` (BM25 keyword match),
->   `symbol_search` (exact hits, e.g. `Trainer.fit`)
-> → `hybrid_merge` fuses dense + sparse by reciprocal rank, then unions the symbol
->   hits and deduplicates by id
-> → `rerank` with the `bge-reranker-base` cross-encoder
-> → drop chunks far below the best match, keep `top_k` (default 8)
-> → `stream_from_chunks` → **answer, with its sources cited**
+```mermaid
+flowchart TB
+    Q["User question"] --> RW["contextualize_query<br/>rewrite follow-up using chat history"]
+    RW --> CQ["clean_query"]
+    CQ --> D["dense_search<br/>Chroma vector similarity"]
+    CQ --> S["sparse_search<br/>BM25 keyword match"]
+    CQ --> SY["symbol_search<br/>exact hits, e.g. Trainer.fit"]
+    D --> M["hybrid_merge<br/>reciprocal rank fusion"]
+    S --> M
+    M --> U["union, deduplicated by id"]
+    SY --> U
+    U --> RR["rerank<br/>bge-reranker-base cross-encoder"]
+    RR --> F["drop chunks far below the best match<br/>keep top_k (default 8)"]
+    F --> G["stream_from_chunks<br/>llama3.1:8b or an OpenAI model"]
+    G --> A["Answer, with its sources cited"]
+```
 
 Search is hybrid because each strategy fails differently: vector similarity handles
 paraphrase but blurs rare identifiers, keyword search catches those, and symbol lookup
